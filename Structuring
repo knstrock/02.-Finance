@@ -1,0 +1,76 @@
+import pandas as pd
+import tkinter as tk
+from tkinter import ttk, filedialog
+
+
+def process_structure_data(structure_data):
+    for item in structure_data:
+        path = item[0].split('\\')
+        code = item[1]
+
+        parent = ""
+        for element in path[::-1]:
+            element_id = f"{parent}-{element}"
+            if not treeview.exists(element_id):
+                treeview.insert(parent, tk.END, element_id, text=element)
+            parent = element_id
+        treeview.set(parent, "code", code)
+
+
+def open_excel_file():
+    file_path = filedialog.askopenfilename()
+
+    try:
+        df = pd.read_excel(file_path)
+        print("Файл Excel успешно загружен")
+    except Exception as e:
+        print(f"Не удалось прочитать файл. Ошибка: {e}")
+
+
+def open_structure_file():
+    file_path = filedialog.askopenfilename()
+
+    try:
+        df = pd.read_excel(file_path)
+        structure_data = [tuple(x) for x in df.to_records(index=False)]
+        process_structure_data(structure_data)
+    except Exception as e:
+        print(f"Не удалось прочитать файл. Ошибка: {e}")
+
+
+def assign_value():
+    print("Значение назначено")
+
+
+def unassign_value():
+    print("Значение отменено")
+
+
+# Создание основного окна
+root = tk.Tk()
+root.title("Excel to Structure Mapper")
+root.geometry("800x600")
+
+# Создание меню
+menu = tk.Menu(root)
+root.config(menu=menu)
+
+file_menu = tk.Menu(menu)
+menu.add_cascade(label="Файл", menu=file_menu)
+file_menu.add_command(label="Открыть Excel файл...", command=open_excel_file)
+file_menu.add_command(label="Открыть файл структуры...", command=open_structure_file)
+
+# Создание структурированного списка
+treeview = ttk.Treeview(root, columns=("code",), displaycolumns=("code",), selectmode=tk.BROWSE)
+treeview.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+
+treeview.heading("#0", text="Structure", anchor=tk.W)
+treeview.heading("code", text="Code", anchor=tk.W)
+
+assign_button = tk.Button(root, text="Assign Value", command=assign_value)
+assign_button.pack(side=tk.BOTTOM, fill=tk.X)
+
+unassign_button = tk.Button(root, text="Unassign Value", command=unassign_value)
+unassign_button.pack(side=tk.BOTTOM, fill=tk.X)
+
+root.mainloop()
