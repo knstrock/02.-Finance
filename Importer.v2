@@ -9,7 +9,7 @@ class MappingApp(tk.Tk):
         super().__init__()
 
         self.title("Mapping App")
-        self.geometry("600x600")
+        self.geometry("800x600")
 
         self.create_widgets()
 
@@ -39,7 +39,11 @@ class MappingApp(tk.Tk):
 
         # Set initial and fixed column widths
         self.first_treeview.column("Name", width=150, minwidth=150, stretch=True)
-        self.first_treeview.column("Value", width=80, minwidth=80, stretch=False)
+        self.first_treeview.column("Value", width=50, minwidth=50, stretch=False)
+
+        # Расчет диффа
+        self.difference_label = ttk.Label(self.first_frame, text="Difference: 0")
+        self.difference_label.grid(column=0, row=3)
 
         ttk.Button(self.first_frame, text="Open Excel File", command=self.load_first_screen_data).grid(column=0, row=2)
 
@@ -57,12 +61,17 @@ class MappingApp(tk.Tk):
         if file_path:
             data = pd.read_excel(file_path)
             self.first_treeview.delete(*self.first_treeview.get_children())
+            total_value = 0
             for _, row in data.iterrows():
                 self.first_treeview.insert("", tk.END, values=(row["Name"], row["Value"]))
+                total_value += row["Value"]
+
+            # Обновите текст метки Difference
+            self.difference_label.config(text=f"Difference: {total_value:.2f}")
 
     def create_second_screen(self):
         self.second_frame = ttk.Frame(self)
-        self.second_frame.grid(column=1, row=0, padx=10, pady=10)
+        self.second_frame.place(x=270, y=0, width=800, height=300)
 
         ttk.Label(self.second_frame, text="Second Screen").grid(column=0, row=0)
 
@@ -70,6 +79,10 @@ class MappingApp(tk.Tk):
         self.second_treeview.grid(column=0, row=1)
         self.second_treeview.heading("Structure", text="Structure")
         self.second_treeview.heading("code", text="Code")
+
+        # Set initial and fixed column widths
+        self.second_treeview.column("Structure", width=450, minwidth=450, stretch=False)
+        self.second_treeview.column("code", width=40, minwidth=40, stretch=False)
 
         ttk.Button(self.second_frame, text="Open Structure File", command=self.load_structure_data).grid(column=0, row=2)
 
@@ -83,7 +96,7 @@ class MappingApp(tk.Tk):
 
     def create_third_screen(self):
         self.third_frame = ttk.Frame(self)
-        self.third_frame.grid(column=0, row=1, padx=10, pady=10)
+        self.third_frame.place(x=20, y=350, width=230, height=300)
 
         ttk.Label(self.third_frame, text="Third Screen").grid(column=0, row=0)
 
