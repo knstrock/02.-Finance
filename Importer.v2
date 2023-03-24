@@ -9,7 +9,7 @@ class MappingApp(tk.Tk):
         super().__init__()
 
         self.title("Mapping App")
-        self.geometry("800x600")
+        self.geometry("800x560")
 
         self.create_widgets()
 
@@ -24,7 +24,7 @@ class MappingApp(tk.Tk):
         self.first_frame = ttk.Frame(self)
         self.first_frame.place(x=20, y=0, width=230, height=300)
 
-        ttk.Label(self.first_frame, text="First Screen").grid(column=0, row=0)
+        ttk.Label(self.first_frame, text="PARAMETERS").grid(column=0, row=0)
 
         self.first_treeview = ttk.Treeview(self.first_frame, columns=("Name", "Value"), show="headings")
         self.first_treeview.grid(column=0, row=1)
@@ -71,9 +71,9 @@ class MappingApp(tk.Tk):
 
     def create_second_screen(self):
         self.second_frame = ttk.Frame(self)
-        self.second_frame.place(x=270, y=0, width=800, height=300)
+        self.second_frame.place(x=285, y=0, width=800, height=300)
 
-        ttk.Label(self.second_frame, text="Second Screen").grid(column=0, row=0)
+        ttk.Label(self.second_frame, text="MAPPING").grid(column=0, row=0)
 
         self.second_treeview = ttk.Treeview(self.second_frame, columns=("Structure", "code"), show="headings")
         self.second_treeview.grid(column=0, row=1)
@@ -96,9 +96,9 @@ class MappingApp(tk.Tk):
 
     def create_third_screen(self):
         self.third_frame = ttk.Frame(self)
-        self.third_frame.place(x=20, y=350, width=230, height=300)
+        self.third_frame.place(x=20, y=300, width=800, height=300)
 
-        ttk.Label(self.third_frame, text="Third Screen").grid(column=0, row=0)
+        ttk.Label(self.third_frame, text="STRUCTURE VIEW").grid(column=0, row=0)
 
         self.mapping_treeview = ttk.Treeview(self.third_frame, columns=("code", "name", "value"), show="tree")
         self.mapping_treeview.grid(column=0, row=1)
@@ -108,11 +108,11 @@ class MappingApp(tk.Tk):
         self.mapping_treeview.tag_configure("dim", foreground="#999999")
 
     def create_mapping_buttons(self):
-        self.map_button = ttk.Button(self, text="Mapping", command=self.map_selected_items)
-        self.map_button.grid(column=2, row=1, padx=10, pady=10)
+        self.map_button = ttk.Button(self, text="V", command=self.map_selected_items)
+        self.map_button.place(x=240, y=80, width=30, height=30)
 
-        self.unmap_button = ttk.Button(self, text="Unmapping", command=self.unmap_selected_items)
-        self.unmap_button.grid(column=3, row=1, padx=10, pady=10)
+        self.unmap_button = ttk.Button(self, text="X", command=self.unmap_selected_items)
+        self.unmap_button.place(x=240, y=120, width=30, height=30)
 
     def map_selected_items(self):
         first_selected_item = self.first_treeview.selection()
@@ -156,7 +156,7 @@ class MappingApp(tk.Tk):
 
     def create_export_button(self):
         self.export_button = ttk.Button(self, text="Export to Excel", command=self.export_to_excel)
-        self.export_button.grid(column=4, row=1, padx=10, pady=10)
+        self.export_button.place(x=285, y=525, width=100, height=25)
 
     def export_to_excel(self):
         file_path = filedialog.asksaveasfilename(defaultextension=".xlsx")
