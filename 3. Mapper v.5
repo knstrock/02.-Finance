@@ -159,17 +159,18 @@ class MappingApp(tk.Tk):
                 self.populate_treeview(item_id, value["children"])
 
     def create_third_screen(self):
+        style = ttk.Style()
+        style.configure("Small.Treeview", font=("Arial", int(10 / 1)), rowheight=int(16 / 1))
         self.third_frame = ttk.Frame(self)
         self.third_frame.place(x=20, y=300, width=800, height=300)
 
         ttk.Label(self.third_frame, text="STRUCTURE VIEW").grid(column=0, row=0)
 
-        # Измените строку ниже
-        self.mapping_treeview = ttk.Treeview(self.third_frame, columns=("code", "name", "value"), show="tree headings")
+        self.mapping_treeview = ttk.Treeview(self.third_frame, columns=("code"), show="tree", style="Small.Treeview")
         self.mapping_treeview.grid(column=0, row=1)
 
-        # Измените строку ниже
         self.mapping_treeview.column("#0", width=300)
+        self.mapping_treeview.column("code", width=100)
 
         self.mapping_treeview.tag_configure("bold", font=("Arial", 10, "bold"))
         self.mapping_treeview.tag_configure("dim", foreground="#999999")
