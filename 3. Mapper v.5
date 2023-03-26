@@ -244,6 +244,8 @@ class MappingApp(tk.Tk):
 
             # Если родительский элемент еще не был добавлен, добавить его
             new_node = self.mapping_treeview.insert(parent, tk.END, text=text)
+            # Раскрываем текущий узел
+            self.mapping_treeview.item(new_node, open=True)
             self.add_parents_to_mapping_treeview(new_node, parents_list[1:], name, value)
 
     def unmap_selected_items(self):
