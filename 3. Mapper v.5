@@ -164,9 +164,12 @@ class MappingApp(tk.Tk):
 
         ttk.Label(self.third_frame, text="STRUCTURE VIEW").grid(column=0, row=0)
 
-        self.mapping_treeview = ttk.Treeview(self.third_frame, columns=("code", "name", "value"), show="tree")
+        # Измените строку ниже
+        self.mapping_treeview = ttk.Treeview(self.third_frame, columns=("code", "name", "value"), show="tree headings")
         self.mapping_treeview.grid(column=0, row=1)
-        self.mapping_treeview.column("#0", width=0)
+
+        # Измените строку ниже
+        self.mapping_treeview.column("#0", width=300)
 
         self.mapping_treeview.tag_configure("bold", font=("Arial", 10, "bold"))
         self.mapping_treeview.tag_configure("dim", foreground="#999999")
@@ -177,6 +180,24 @@ class MappingApp(tk.Tk):
 
         self.unmap_button = ttk.Button(self, text="UNMAP IT", command=self.unmap_selected_items)
         self.unmap_button.place(x=240, y=120, width=30, height=30)
+
+    def add_item_to_mapping_treeview(self, item_id):
+        if not item_id:
+            return
+
+        parent_id = self.second_treeview.parent(item_id)
+        self.add_item_to_mapping_treeview(parent_id)
+
+        item_text = self.second_treeview.item(item_id, "text")
+        item_values = self.second_treeview.item(item_id, "values")
+
+        # Проверяем, существует ли уже данный элемент в mapping_treeview
+        existing_items = self.mapping_treeview.get_children()
+        for existing_item in existing_items:
+            if self.mapping_treeview.item(existing_item, "text") == item_text:
+                return
+
+        self.mapping_treeview.insert("", tk.END, text=item_text, values=item_values)
 
     def map_selected_items(self):
         first_selected_item = self.first_treeview.selection()
@@ -189,13 +210,41 @@ class MappingApp(tk.Tk):
             name, value = first_values
             parent_item = self.second_treeview.parent(second_selected_item[0])
 
-            # Проверяем, является ли выбранный элемент в second_treeview последним в своем уровне
+            # Если выбранный элемент в second_treeview не имеет потомков
             if not self.second_treeview.get_children(second_selected_item[0]):
+                # Получить список всех родительских элементов
+                parents = []
+                current_item = second_selected_item[0]
+                while current_item:
+                    parents.append(current_item)
+                    current_item = self.second_treeview.parent(current_item)
+
+                # Рекурсивно добавить родительские элементы и выбранный элемент в mapping_treeview
+                self.add_parents_to_mapping_treeview("", parents[::-1], name, value)
+
                 # Добавляем элемент из first_treeview на том же уровне, что и выбранный элемент в second_treeview
                 self.second_treeview.insert(parent_item, tk.END, text=name, values=(value,))
 
-                # Удаляем элемент из first_treeview
+                # Удалить элемент из first_treeview
                 self.first_treeview.delete(first_selected_item[0])
+
+    def add_parents_to_mapping_treeview(self, parent, parents_list, name, value):
+        if not parents_list:
+            # Если список родителей пуст, добавить элемент из first_treeview
+            self.mapping_treeview.insert(parent, tk.END, text=name, values=(value,))
+        else:
+            current_parent = parents_list[0]
+            text = self.second_treeview.item(current_parent)["text"]
+            children = self.mapping_treeview.get_children(parent)
+
+            for child in children:
+                if self.mapping_treeview.item(child)["text"] == text:
+                    self.add_parents_to_mapping_treeview(child, parents_list[1:], name, value)
+                    return
+
+            # Если родительский элемент еще не был добавлен, добавить его
+            new_node = self.mapping_treeview.insert(parent, tk.END, text=text)
+            self.add_parents_to_mapping_treeview(new_node, parents_list[1:], name, value)
 
     def unmap_selected_items(self):
         second_selected_item = self.second_treeview.selection()
