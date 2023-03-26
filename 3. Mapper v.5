@@ -249,6 +249,25 @@ class MappingApp(tk.Tk):
             self.mapping_treeview.item(new_node, open=True)
             self.add_parents_to_mapping_treeview(new_node, parents_list[1:], name, value)
 
+    def remove_item_and_children(self, item):
+        children = self.mapping_treeview.get_children(item)
+        for child in children:
+            self.remove_item_and_children(child)
+        self.mapping_treeview.delete(item)
+
+    def remove_item_from_mapping_treeview(self, parent, search_name, search_value):
+        children = self.mapping_treeview.get_children(parent)
+
+        for child in children:
+            child_name = self.mapping_treeview.item(child, "text")
+            child_values = self.mapping_treeview.item(child, "values")
+            if child_name == search_name and (not child_values or child_values[0] == search_value):
+                # Удалить потомков элемента и сам элемент
+                self.remove_item_and_children(child)
+                break
+            else:
+                self.remove_item_from_mapping_treeview(child, search_name, search_value)
+
     def unmap_selected_items(self):
         second_selected_item = self.second_treeview.selection()
 
@@ -268,6 +287,9 @@ class MappingApp(tk.Tk):
 
             # Удаляем элемент из second_treeview
             self.second_treeview.delete(second_selected_item[0])
+
+            # Удаляем элемент из mapping_treeview (третьего экрана)
+            self.remove_item_from_mapping_treeview("", second_name, second_value)
 
     def create_export_button(self):
         self.export_button = ttk.Button(self, text="Export to Excel", command=self.export_to_excel)
