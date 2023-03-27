@@ -1,0 +1,340 @@
+import tkinter as tk
+from tkinter import ttk, filedialog
+import pandas as pd
+from pandas import DataFrame
+from typing import Dict, Any
+
+class MappingApp(tk.Tk):
+    def __init__(self):
+        super().__init__()
+
+        self.title("Mapping App")
+        self.geometry("800x560")
+        self.item_code_mapping = {}
+        self.create_widgets()
+        self.second_treeview.tag_configure("transferred_item", background="black", foreground="white", font=("TkDefaultFont", 9, "italic"), anchor="e")
+
+    def create_widgets(self):
+        self.create_first_screen()
+        self.create_second_screen()
+        self.create_third_screen()
+        self.create_mapping_buttons()
+        self.create_export_button()
+
+    def create_first_screen(self):
+        self.first_frame = ttk.Frame(self)
+        self.first_frame.place(x=20, y=0, width=230, height=300)
+
+        ttk.Label(self.first_frame, text="PARAMETERS").grid(column=0, row=0)
+
+        self.first_treeview = ttk.Treeview(self.first_frame, columns=("Name", "Value"), show="headings")
+        self.first_treeview.grid(column=0, row=1)
+        self.first_treeview.heading("Name", text="Name", command=lambda: self.sort_column(self.first_treeview, "Name", False))
+        self.first_treeview.heading("Value", text="Value", command=lambda: self.sort_column(self.first_treeview, "Value", False))
+        # Создайте вертикальный ползунок и привяжите его к первому Treeview
+        self.first_scrollbar = ttk.Scrollbar(self.first_frame, orient=tk.VERTICAL, command=self.first_treeview.yview)
+        self.first_scrollbar.grid(column=1, row=1, sticky="ns")
+
+        # Свяжите ползунок с Treeview
+        self.first_treeview.configure(yscrollcommand=self.first_scrollbar.set)
+
+        # Set initial and fixed column widths
+        self.first_treeview.column("Name", width=150, minwidth=150, stretch=True)
+        self.first_treeview.column("Value", width=50, minwidth=50, stretch=False)
+
+        # Расчет диффа
+        self.difference_label = ttk.Label(self.first_frame, text="Difference: 0")
+        self.difference_label.grid(column=0, row=3)
+
+        ttk.Button(self.first_frame, text="Open Excel File", command=self.load_first_screen_data).grid(column=0, row=2)
+
+    def sort_column(self, treeview, column, reverse):
+        items = treeview.get_children()
+        sorted_items = sorted(items, key=lambda item: treeview.set(item, column), reverse=reverse)
+
+        for index, item in enumerate(sorted_items):
+            treeview.move(item, '', index)
+
+        treeview.heading(column, command=lambda: self.sort_column(treeview, column, not reverse))
+
+    def load_first_screen_data(self):
+        file_path = filedialog.askopenfilename()
+        if file_path:
+            data = pd.read_excel(file_path)
+            self.first_treeview.delete(*self.first_treeview.get_children())
+            total_value = 0
+            for _, row in data.iterrows():
+                self.first_treeview.insert("", tk.END, values=(row["Name"], row["Value"]))
+                total_value += row["Value"]
+            # Обновите текст метки Difference
+            self.difference_label.config(text=f"Difference: {total_value:.2f}")
+
+    def create_second_screen(self):
+        self.second_frame = ttk.Frame(self)
+        self.second_frame.place(x=285, y=0, width=800, height=300)
+
+        ttk.Label(self.second_frame, text="STRUCTURE").grid(column=0, row=0)
+
+        self.second_treeview = ttk.Treeview(self.second_frame, columns=("Type"), show="tree headings")
+        self.second_treeview.grid(column=0, row=1)
+        self.second_treeview.heading("#0", text="Structure")
+        self.second_treeview.column("#0", width=300)
+
+        self.second_treeview.heading("Type", text="Type")
+        self.second_treeview.column("Type", width=100, minwidth=100, stretch=False)
+
+        ttk.Button(self.second_frame, text="Load Excel", command=self.load_structure_data).grid(column=0, row=2)
+
+    def add_node_to_tree(self, parent, path, code):
+        if not path:
+            return
+
+        current = path[0]
+        existing = self.second_treeview.get_children(parent)
+
+        for child in existing:
+            if self.second_treeview.item(child)["text"] == current:
+                self.add_node_to_tree(child, path[1:], code)
+                return
+
+        new_node = self.second_treeview.insert(parent, "end", text=current, values=())
+        self.item_code_mapping[new_node] = code  # Сохраняем код элемента в словаре
+        self.add_node_to_tree(new_node, path[1:], code)
+
+    def create_structure_dict(self, df):
+        structure_dict = {}
+        for _, row in df.iterrows():
+            parts = row[0].split("\\")
+            code = row[1]
+            current_level = structure_dict
+            for part in parts:
+                if part not in current_level:
+                    current_level[part] = {"_code": code, "children": {}}
+                    code = None
+                current_level = current_level[part]["children"]
+        return structure_dict
+
+    def build_tree(self, tree_data):
+        self.second_treeview.delete(*self.second_treeview.get_children())
+        self.populate_treeview("", tree_data)
+
+    def load_structure_data(self):
+        file_path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")])
+
+        if not file_path:
+            return
+
+        df = pd.read_excel(file_path, header=None, usecols=[0, 1])
+
+        for index, row in df.iterrows():
+            path = row[0].split("\\")
+            code = row[1]
+            self.add_node_to_tree("", path, code)
+
+    def process_data(self, data: DataFrame) -> Dict[str, Any]:
+        structure_dict = {}
+        for _, row in data.iterrows():
+            parts = row[0].split("\\")
+            code = row[1]
+            current_level = structure_dict
+            for part in parts:
+                if part not in current_level:
+                    current_level[part] = {"_code": code, "children": {}}
+                    code = None
+                current_level = current_level[part]["children"]
+        return structure_dict
+
+    def populate_treeview(self, parent_item_id: str, structure_dict: Dict[str, Any]):
+        for key, value in structure_dict.items():
+            if key == "_code":
+                continue
+
+            item_id = self.second_treeview.insert(
+                parent_item_id,
+                "end",
+                text="",
+                values=(value["_code"], key)
+            )
+
+            if "children" in value:
+                self.populate_treeview(item_id, value["children"])
+
+    def create_third_screen(self):
+        style = ttk.Style()
+        style.configure("Small.Treeview", font=("Arial", int(10 / 1)), rowheight=int(16 / 1))
+        self.third_frame = ttk.Frame(self)
+        self.third_frame.place(x=20, y=300, width=800, height=300)
+
+        ttk.Label(self.third_frame, text="STRUCTURE VIEW").grid(column=0, row=0)
+
+        self.mapping_treeview = ttk.Treeview(self.third_frame, columns=("code"), show="tree", style="Small.Treeview")
+        self.mapping_treeview.grid(column=0, row=1)
+
+        self.mapping_treeview.column("#0", width=300)
+        self.mapping_treeview.column("code", width=100)
+
+        self.mapping_treeview.tag_configure("bold", font=("Arial", 10, "bold"))
+        self.mapping_treeview.tag_configure("dim", foreground="#999999")
+
+    def create_mapping_buttons(self):
+        self.map_button = ttk.Button(self, text="MAP IT", command=self.map_selected_items)
+        self.map_button.place(x=240, y=80, width=30, height=30)
+
+        self.unmap_button = ttk.Button(self, text="UNMAP IT", command=self.unmap_selected_items)
+        self.unmap_button.place(x=240, y=120, width=30, height=30)
+
+    def add_item_to_mapping_treeview(self, item_id):
+        if not item_id:
+            return
+
+        parent_id = self.second_treeview.parent(item_id)
+        self.add_item_to_mapping_treeview(parent_id)
+
+        item_text = self.second_treeview.item(item_id, "text")
+        item_values = self.second_treeview.item(item_id, "values")
+
+        # Проверяем, существует ли уже данный элемент в mapping_treeview
+        existing_items = self.mapping_treeview.get_children()
+        for existing_item in existing_items:
+            if self.mapping_treeview.item(existing_item, "text") == item_text:
+                return
+
+        self.mapping_treeview.insert("", tk.END, text=item_text, values=item_values)
+
+    def add_item_to_second_treeview(self, parent, name, value):
+        return self.second_treeview.insert(parent, tk.END, text=name, values=(value,), tags=("transferred_item",))
+
+    def map_selected_items(self):
+        first_selected_item = self.first_treeview.selection()
+        second_selected_item = self.second_treeview.selection()
+
+        if first_selected_item and second_selected_item:
+            first_values = self.first_treeview.item(first_selected_item[0], "values")
+            second_item = self.second_treeview.item(second_selected_item[0])
+
+            name, value = first_values
+            parent_item = self.second_treeview.parent(second_selected_item[0])
+
+            # Если выбранный элемент в second_treeview имеет потомков
+            if self.second_treeview.get_children(second_selected_item[0]):
+                # Добавляем элемент из first_treeview как дочерний элемент выбранного элемента в second_treeview
+                self.add_item_to_second_treeview(second_selected_item[0], name, value)
+            else:
+                # Проверяем, есть ли соседние элементы на том же уровне, что и выбранный элемент
+                siblings = self.second_treeview.get_children(parent_item)
+
+                if siblings:
+                    # Если есть соседние элементы, добавляем элемент из first_treeview после выбранного элемента
+                    index = siblings.index(second_selected_item[0]) + 1
+                    new_item = self.add_item_to_second_treeview(parent_item, name, value)
+                    self.second_treeview.move(new_item, parent_item, index)
+                else:
+                    # Если нет соседних элементов, добавляем элемент из first_treeview как дочерний элемент выбранного элемента в second_treeview
+                    self.add_item_to_second_treeview(second_selected_item[0], name, value)
+
+            # Получить список всех родительских элементов
+            parents = []
+            current_item = second_selected_item[0]
+            while current_item:
+                parents.append(current_item)
+                current_item = self.second_treeview.parent(current_item)
+
+            # Рекурсивно добавить родительские элементы и выбранный элемент в mapping_treeview
+            self.add_parents_to_mapping_treeview("", parents[::-1], name, value)
+
+            # Удалить элемент из first_treeview
+            self.first_treeview.delete(first_selected_item[0])
+
+    def add_parents_to_mapping_treeview(self, parent, parents_list, name, value):
+        if not parents_list:
+            # Если список родителей пуст, добавить элемент из first_treeview
+            self.mapping_treeview.insert(parent, tk.END, text=name, values=(value,))
+        else:
+            current_parent = parents_list[0]
+            text = self.second_treeview.item(current_parent)["text"]
+            children = self.mapping_treeview.get_children(parent)
+
+            for child in children:
+                if self.mapping_treeview.item(child)["text"] == text:
+                    self.add_parents_to_mapping_treeview(child, parents_list[1:], name, value)
+                    return
+
+            # Если родительский элемент еще не был добавлен, добавить его
+            new_node = self.mapping_treeview.insert(parent, tk.END, text=text)
+            # Раскрываем текущий узел
+            self.mapping_treeview.item(new_node, open=True)
+            self.add_parents_to_mapping_treeview(new_node, parents_list[1:], name, value)
+
+    def remove_item_and_children(self, item):
+        children = self.mapping_treeview.get_children(item)
+        for child in children:
+            self.remove_item_and_children(child)
+        self.mapping_treeview.delete(item)
+
+    def remove_item_from_mapping_treeview(self, parent, search_name, search_value):
+        children = self.mapping_treeview.get_children(parent)
+
+        for child in children:
+            child_name = self.mapping_treeview.item(child, "text")
+            child_values = self.mapping_treeview.item(child, "values")
+            if child_name == search_name and (not child_values or child_values[0] == search_value):
+                # Удалить потомков элемента и сам элемент
+                self.remove_item_and_children(child)
+                break
+            else:
+                self.remove_item_from_mapping_treeview(child, search_name, search_value)
+
+    def unmap_selected_items(self):
+        second_selected_item = self.second_treeview.selection()
+
+        if second_selected_item:
+            second_name = self.second_treeview.item(second_selected_item[0], "text")
+            second_values = self.second_treeview.item(second_selected_item[0], "values")
+
+            # Если значения в столбце "Type" нет, то это элемент структуры, и мы его пропускаем
+            if not second_values:
+                return
+
+            second_value = second_values[0]
+            parent_item = self.second_treeview.parent(second_selected_item[0])
+
+            # Добавляем элемент обратно в first_treeview с его исходными значениями (Name и Value)
+            self.first_treeview.insert("", tk.END, values=(second_name, second_value))
+
+            # Удаляем элемент из second_treeview
+            self.second_treeview.delete(second_selected_item[0])
+
+            # Удаляем элемент из mapping_treeview (третьего экрана)
+            self.remove_item_from_mapping_treeview("", second_name, second_value)
+
+    def create_export_button(self):
+        self.export_button = ttk.Button(self, text="Export to Excel", command=self.export_to_excel)
+        self.export_button.place(x=285, y=525, width=100, height=25)
+
+    def export_to_excel(self):
+        file_path = filedialog.asksaveasfilename(defaultextension=".xlsx")
+        if file_path:
+            data = []
+            for item in self.mapping_treeview.get_children():
+                values = self.mapping_treeview.item(item, "values")
+                code, name, value = values
+                structure = self.mapping_treeview.item(item, "text")
+                data.append((code, structure, name, value))
+
+            df = pd.DataFrame(data, columns=["CODE", "STRUCTURE", "Name", "Value"])
+
+            # Save the DataFrame to an Excel file
+            writer = pd.ExcelWriter(file_path, engine='xlsxwriter')
+            df.to_excel(writer, index=False, sheet_name='Sheet1')
+
+            # Adjust column widths to fit the content
+            for idx, col in enumerate(df):
+                series = df[col]
+                max_len = max(series.astype(str).map(len).max(), len(str(series.name))) + 1
+                writer.sheets['Sheet1'].set_column(idx, idx, max_len)
+
+            writer.save()
+
+if __name__ == "__main__":
+    app = MappingApp()
+    app.mainloop()
