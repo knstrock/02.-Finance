@@ -1,0 +1,251 @@
+#!pip install xlrd
+#!pip install pandas
+#!pip install numpy
+import pandas as pd
+import numpy as np
+
+file_path = 'C:/Users/knstrock/Desktop/JOB/ASBIS/Sample - APAC Superstore2.xls'
+xl = pd.ExcelFile(file_path, engine='xlrd')
+
+# Вывод списка всех листов
+sheet_names = xl.sheet_names
+
+# Отображение
+print("Available sheets:")
+for i, sheet_name in enumerate(sheet_names):
+    print(f"{i + 1}. {sheet_name}")
+
+# Что будем загружать в дата сет для анализа?
+#selected_sheets_indices = input("Через запятую какие sheets выводить: ")
+
+# Преобразуем в индексы
+#selected_sheets_indices = list(map(int, selected_sheets_indices.split(',')))
+selected_sheets_indices = list(map(int, [1,2,3]))
+# Загружаем в словарь DataFrames
+dataframes = {}
+for sheet_index in selected_sheets_indices:
+    sheet_name = sheet_names[sheet_index - 1]
+    dataframes[sheet_name] = xl.parse(sheet_name)
+
+# Отобразим выбранные DataFrame
+for sheet_name, dataframe in dataframes.items():
+    print(f"Sheet name: {sheet_name}")
+    display(dataframe.head(4))
+
+# Выберем лист 1. Orders (впишем исходя из Available sheets списка: Orders, Returns...)
+working_dataframe = dataframes["Orders"]
+
+# Отобразим первые строки датафрейма в порядке по ROWID
+sorted_working_dataframe = working_dataframe.sort_values(by='Row ID', ascending=True)
+display(sorted_working_dataframe.head(4))
+
+#Начнем предварительную проверку DataSet на целостоность, повторяемость и тд.
+
+#1. Проверим на наличие пропущенных данных
+
+missing_values = working_dataframe.isna().sum()
+total_missing_values = missing_values.sum()
+
+if total_missing_values == 0:
+    print("Пропущенных данных нет.")
+else:
+    print("Количество пропущенных значений по столбцам:")
+    print(missing_values)
+    
+    # Сохраним наш датафрейм
+    filled_working_dataframe = working_dataframe.copy()
+
+    # Заполним пропущенные значения модой для столбцов "Order ID" и "Customer ID"
+    for column in ['Order ID', 'Customer ID']:
+        mode = filled_working_dataframe[column].mode().iloc[0]
+        filled_working_dataframe[column].fillna(mode, inplace=True)
+
+    # Заполним пропущенные значения модой с использованием groupby и fillna
+    for column in missing_values[(missing_values > 0) & (missing_values.index != 'Order ID') & (missing_values.index != 'Customer ID')].index:
+        mode_per_group = filled_working_dataframe.groupby(['Customer ID', 'Product ID'])[column].agg(lambda x: x.mode().iloc[0] if not x.mode().empty else np.nan)
+        filled_working_dataframe[column] = filled_working_dataframe.set_index(['Customer ID', 'Product ID'])[column].fillna(mode_per_group).reset_index(drop=True)
+
+    # Проверяем, остались ли пропущенные значения после заполнения
+    print("\nПроверка пропущенных значений после заполнения:")
+    print(filled_working_dataframe.isna().sum())
+    display(filled_working_dataframe.head(4))
+
+#2. Проверим на наличие дублирующихся строк
+
+# Создаем копию рабочего датафрейма
+processed_dataframe = working_dataframe.copy()
+
+# Создаем DataFrame без столбца 'Row ID'
+data_without_row_id = processed_dataframe.drop('Row ID', axis=1)
+
+# Проверяем наличие дубликатов
+duplicate_rows = data_without_row_id.duplicated()
+print("Количество дублирующихся строк:", duplicate_rows.sum())
+
+if duplicate_rows.sum() > 0:
+    # Отображаем дублирующиеся строки и оригиналы
+    print("Оригинальные строки и их дубликаты:")
+    
+    for index, row in processed_dataframe[duplicate_rows].iterrows():
+        duplicate_index = processed_dataframe[data_without_row_id.eq(row.drop('Row ID')).all(axis=1)].index[0]
+        original_row = processed_dataframe.loc[duplicate_index]
+        display(pd.concat([original_row.to_frame().T, row.to_frame().T]))
+        
+    # Спрашиваем пользователя, нужно ли удалять дубликаты
+    user_input = input("Хотите удалить дублирующиеся строки? (да/нет): ").strip().lower()
+    
+    if user_input == "да":
+        processed_dataframe = processed_dataframe[~data_without_row_id.duplicated()]
+        print("Дублирующиеся строки удалены.")
+        
+        # Отображаем обновленный датафрейм
+        print("Обновленный датафрейм:")
+        display(processed_dataframe.head())
+    else:
+        print("Дублирующиеся строки не удалены.")
+else:
+    print("Дублирующихся строк не найдено.")
+
+#3. Проверим выбросы в данных
+
+# Добавляем новый параметр Price
+processed_dataframe['Price'] = (processed_dataframe['Sales'] - processed_dataframe['Discount']) / processed_dataframe['Quantity']
+
+# Выбираем числовые признаки
+numeric_columns = processed_dataframe.select_dtypes(include=['int64', 'float64']).columns
+
+# Применение межквартильного размаха (IQR) для определения выбросов
+outliers = {}
+for column in numeric_columns:
+    Q1 = processed_dataframe[column].quantile(0.25)
+    Q3 = processed_dataframe[column].quantile(0.75)
+    IQR = Q3 - Q1
+    
+    lower_bound = Q1 - 1.5 * IQR
+    upper_bound = Q3 + 1.5 * IQR
+    
+    outlier_mask = (processed_dataframe[column] < lower_bound) | (processed_dataframe[column] > upper_bound)
+    outliers[column] = processed_dataframe[outlier_mask]
+
+print("Выбросы по каждому признаку:")
+columns_with_outliers = []
+for column, outlier_df in outliers.items():
+    if not outlier_df.empty:
+        print(f"{column}: {len(outlier_df)} выбросов")
+        columns_with_outliers.append(column)
+    else:
+        print(f"{column}: нет выбросов")
+
+# Вывод строк с выбросами и спрашиваем пользователя, хотим ли мы их обработать
+processed_dataframe_with_outliers = processed_dataframe.copy()
+
+for column in columns_with_outliers:
+    # Визуализация гистограмм и ящиков с усами для числовых признаков с выбросами
+    plt.figure(figsize=(12, 6))
+    
+    plt.subplot(1, 2, 1)
+    sns.histplot(data=processed_dataframe, x=column, kde=True)
+    plt.title(f'Гистограмма для {column}')
+    
+    plt.subplot(1, 2, 2)
+    sns.boxplot(data=processed_dataframe, x=column)
+    plt.title(f'Ящик с усами для {column}')
+    
+    plt.show()
+    
+    print(f"\nВыбросы для столбца '{column}':")
+    display(outliers[column])
+    
+    user_input = input(f"Хотите обработать выбросы для столбца '{column}'? (да/нет): ").strip().lower()
+    
+    if user_input == "да":
+        mode = processed_dataframe[column].mode().iloc[0]
+        
+        for index in outliers[column].index:
+            processed_dataframe_with_outliers.at[index, column] = mode
+        
+        print(f"Выбросы для столбца '{column}' заменены на моду ({mode}).")
+    else:
+        print(f"Выбросы для столбца '{column}' оставлены без изменений.")
+
+print("\nОбработанный датафрейм:")
+display(processed_dataframe_with_outliers.head())
+
+# #1. Влияние скидок на объем продаж и прибыль: Проверьте, как величина скидки влияет на количество проданных товаров, общий объем продаж и прибыль. Вы можете проанализировать, как разные категории товаров реагируют на скидки, и определить оптимальный размер скидки для каждой категории.
+# 2. Сезонность продаж: Исследуйте, как продажи различаются в течение года, и выявите сезонные паттерны. Вы можете также сравнить сезонные паттерны для разных категорий товаров и регионов.
+# 3. Сравнение продаж между сегментами клиентов: Сравните продажи, прибыль и средний чек между корпоративными, домашними и потребительскими сегментами. Это может помочь вам лучше понять, какие сегменты являются наиболее выгодными, и сконцентрировать маркетинговые усилия.
+# 4. Эффект скорости доставки на возврат товаров: Исследуйте, как способ доставки влияет на частоту возвратов. Это может помочь определить, стоит ли предлагать более быструю доставку как средство для уменьшения количества возвратов.
+# 5. Продажи и прибыль по географическим регионам: Анализируйте продажи, прибыль и средний чек по разным странам и городам. Выявите регионы с наибольшим потенциалом роста и фокусируйте маркетинговые усилия на этих регионах.
+# 6. Влияние категории товара на продажи и прибыль: Анализируйте продажи, прибыль и средний чек по категориям товаров. Вы можете сравнить различные подкатегории и определить, какие из них являются наиболее востребованными и прибыльными.
+# 7. Влияние некоторых персон и регионов на продажи: Исследуйте, как некоторые персоны и регионы, связанные с клиентами, влияют на продажи и прибыль. Выясните, есть ли определенные персоны или регионы, которые приносят больше продаж и прибыли, и используйте эту информацию для определения, стоит ли увеличить взаимодействие с этими группами или регионами.
+# 8. Взаимосвязь между количеством проданного товара и прибылью: Проверьте, как количество проданных единиц товара влияет на прибыль. Это может помочь определить, стоит ли сосредоточиться на продаже меньшего количества более дорогих товаров или большего количества дешевых товаров для максимизации прибыли.
+# 9. Влияние наличия возвратов на продажи и прибыль: Проанализируйте, как наличие возвратов влияет на общий объем продаж и прибыль. Определите, есть ли определенные категории товаров, которые чаще возвращаются, и предпримите меры для уменьшения возвратов в этих категориях.
+# 10. Эффективность маркетинговых акций: Если у вас есть информация о маркетинговых акциях, связанных с данными о продажах, вы можете анализировать их эффективность, сравнивая продажи и прибыль до и после проведения акции. Это может помочь определить, какие маркетинговые стратегии наиболее эффективны для разных категорий товаров и сегментов клиентов.
+# 11. Влияние дня недели и времени суток на продажи: Анализируйте объем продаж и прибыль в зависимости от дня недели и времени суток. Это может помочь определить наиболее активные часы и дни для продаж, что позволит улучшить планирование рекламных кампаний и других маркетинговых активностей.
+# 12. Возвраты и способ доставки: Исследуйте взаимосвязь между способом доставки и количеством возвратов. Определите, есть ли какая-то связь между быстротой доставки и вероятностью возврата товара клиентом.
+# 13. Частота повторных покупок: Анализируйте, как часто клиенты совершают повторные покупки, и определите, влияет ли это на их средний чек и общую прибыль. Это может помочь выявить возможности для улучшения удержания клиентов и повышения их лояльности.
+# 14. Влияние отзывов на продажи: Если у вас есть доступ к данным об отзывах клиентов, вы можете проанализировать, как отзывы влияют на продажи товаров. Выявите, есть ли корреляция между количеством положительных отзывов и объемом продаж.
+# 15. Распределение продаж по ценовым категориям: Исследуйте, как продажи распределяются между дешевыми, средними и дорогими товарами. Это может помочь определить оптимальный ассортимент товаров для максимизации прибыли.
+# 16. Влияние активности конкурентов на продажи: Если у вас есть доступ к данным о деятельности конкурентов, вы можете проанализировать, как изменения в их маркетинговых кампаниях, ассортименте товаров или ценовой политике влияют на ваш объем продаж и прибыль.
+# 17. Влияние продаж на запасы: Исследуйте, как продажи влияют на запасы товаров, и определите оптимальные уровни запасов для разных категорий товаров. Это может помочь улучшить управление запасами и снизить издержки на хранение товаров.
+# 18. Анализ продаж по каналам распространения: Если у вас есть данные о каналах распространения товаров (например, онлайн, офлайн, через партнеров), проанализируйте, какой канал приносит наибольший объем продаж и прибыль. Это поможет определить, какие каналы распространения следует развивать в приоритетном порядке.
+# 19. Влияние кросс-продаж на прибыль: Исследуйте, как продажа сопутствующих товаров (например, аксессуаров к технике или дополнительных услуг) влияет на прибыль. Выявите возможности для увеличения прибыли за счет кросс-продаж.
+# 20. Влияние маркетинговых кампаний на продажи по сегментам: Исследуйте, как различные маркетинговые кампании влияют на продажи в разных сегментах клиентов (корпоративные, домашние, потребительские). Это поможет определить, какие кампании и стратегии маркетинга наиболее эффективны для каждого сегмента.
+# 21. Влияние цены на продажи и прибыль: Анализируйте, как изменение цен на товары влияет на объем продаж и прибыль. Выявите оптимальные ценовые стратегии для разных категорий товаров и сегментов клиентов.
+# 22. Влияние новых товаров на продажи и прибыль: Исследуйте, как внедрение новых товаров в ассортимент влияет на продажи и прибыль. Это может помочь определить, какие товары стоит добавить в ассортимент и какие товары следует снять с продажи.
+# 23. Влияние обучения и поддержки клиентов на продажи и прибыль: Если у вас есть данные об обучении и поддержке клиентов, проанализируйте, как они влияют на продажи и прибыль. Выявите возможности для улучшения обучения и поддержки, которые могут привести к увеличению продаж и прибыли.
+
+# ГИПОТЕЗА №1 ВЛИЯНИЕ СКИДКИ НА ПРОДАЖИ
+
+import scipy.stats as stats
+
+# Рассчитываем средние значения продаж и прибыли на единицу товара
+aggregated_data['Average Sales'] = aggregated_data['Sales'] / aggregated_data['Quantity']
+aggregated_data['Average Profit'] = aggregated_data['Profit'] / aggregated_data['Quantity']
+
+discount_levels = aggregated_data['Discount'].unique()
+discount_levels.sort()
+
+# Подсчитываем количество сравнений и корректируем уровень значимости с помощью поправки Бонферрони
+num_comparisons = len(discount_levels) * (len(discount_levels) - 1) / 2
+alpha = 0.05 / num_comparisons
+
+print("Независимые тесты Манна-Уитни для сравнения медиан значений продаж и прибыли для каждого уровня скидки:")
+
+for i, discount1 in enumerate(discounts[:-1]):
+    for discount2 in discounts[i + 1:]:
+        sales1 = aggregated_data[aggregated_data['Discount'] == discount1]['Average Sales']
+        sales2 = aggregated_data[aggregated_data['Discount'] == discount2]['Average Sales']
+        u_stat_sales, p_value_sales = stats.mannwhitneyu(sales1, sales2, alternative='two-sided')
+
+        profit1 = aggregated_data[aggregated_data['Discount'] == discount1]['Average Profit']
+        profit2 = aggregated_data[aggregated_data['Discount'] == discount2]['Average Profit']
+        u_stat_profit, p_value_profit = stats.mannwhitneyu(profit1, profit2, alternative='two-sided')
+
+        print(f"  p-value для сравнения скидок {discount1} и {discount2}:")
+        print(f"    продаж: {p_value_sales:.4f}")
+        print(f"    прибыли: {p_value_profit:.4f}")
+
+        if p_value_sales < alpha:
+            print(f"    Скидки {discount1} и {discount2} имеют статистически значимые различия в медианах значений продаж.")
+        else:
+            print(f"    Скидки {discount1} и {discount2} не имеют статистически значимых различий в медианах значений продаж.")
+
+        if p_value_profit < alpha:
+            print(f"    Скидки {discount1} и {discount2} имеют статистически значимые различия в медианах значений прибыли.")
+        else:
+            print(f"    Скидки {discount1} и {discount2} не имеют статистически значимых различий в медианах значений прибыли.")
+        print()
+
+# ГИПОТЕЗА №2 Сезонность продаж в разрезе даты заказа
+monthly_sales['Month'] = pd.to_datetime(monthly_sales['Order Date']).dt.month
+f_stat, p_value = stats.f_oneway(*(monthly_sales.groupby('Month')['Sales'].apply(list)))
+
+print("Однофакторный дисперсионный анализ (ANOVA) для сравнения средних значений продаж между месяцами:")
+print(f"  p-value: {p_value:.4f}")
+
+if p_value < 0.05:
+    print("  Существуют статистически значимые различия между средними значениями продаж в разных месяцах.")
+else:
+    print("  Статистически значимых различий между средними значениями продаж в разных месяцах не обнаружено.")
+
