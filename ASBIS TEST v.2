@@ -1,0 +1,487 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+# In[31]:
+
+
+# !pip install xlrd
+# !pip install pandas
+# !pip install numpy
+# !pip install scipy.stats
+# !pip install seaborn
+# !pip install matplotlib.pyplot
+import pandas as pd
+import numpy as np
+import scipy.stats as stats
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+
+# In[45]:
+
+
+file_path = 'C:/Users/knstrock/Desktop/JOB/ASBIS/Sample - APAC SuperstoreX.xls'
+xl = pd.ExcelFile(file_path, engine='xlrd')
+
+# Вывод списка всех листов
+sheet_names = xl.sheet_names
+
+# Отображение
+print("Available sheets:")
+for i, sheet_name in enumerate(sheet_names):
+    print(f"{i + 1}. {sheet_name}")
+
+# Что будем загружать в дата сет для анализа?
+#selected_sheets_indices = input("Через запятую какие sheets выводить: ")
+
+# Преобразуем в индексы
+#selected_sheets_indices = list(map(int, selected_sheets_indices.split(',')))
+selected_sheets_indices = list(map(int, [1,2,3]))
+# Загружаем в словарь DataFrames
+dataframes = {}
+for sheet_index in selected_sheets_indices:
+    sheet_name = sheet_names[sheet_index - 1]
+    dataframes[sheet_name] = xl.parse(sheet_name)
+
+# Отобразим выбранные DataFrame
+for sheet_name, dataframe in dataframes.items():
+    print(f"Sheet name: {sheet_name}")
+    display(dataframe.head(4))
+
+
+# In[46]:
+
+
+# Выберем лист 1. Orders (впишем исходя из Available sheets списка: Orders, Returns...)
+working_dataframe = dataframes["Orders"]
+
+# Отобразим первые строки датафрейма в порядке по ROWID
+sorted_working_dataframe = working_dataframe.sort_values(by='Row ID', ascending=True)
+display(sorted_working_dataframe.head(4))
+
+
+# In[34]:
+
+
+#Начнем предварительную проверку DataSet на целостоность, повторяемость и тд.
+
+#1. Проверим на наличие пропущенных данных
+
+missing_values = working_dataframe.isna().sum()
+total_missing_values = missing_values.sum()
+
+if total_missing_values == 0:
+    print("Пропущенных данных нет.")
+else:
+    print("Количество пропущенных значений по столбцам:")
+    print(missing_values)
+    
+    # Сохраним наш датафрейм
+    filled_working_dataframe = working_dataframe.copy()
+
+    # Заполним пропущенные значения модой для столбцов "Order ID" и "Customer ID"
+    for column in ['Order ID', 'Customer ID']:
+        mode = filled_working_dataframe[column].mode().iloc[0]
+        filled_working_dataframe[column].fillna(mode, inplace=True)
+
+    # Заполним пропущенные значения модой с использованием groupby и fillna
+    for column in missing_values[(missing_values > 0) & (missing_values.index != 'Order ID') & (missing_values.index != 'Customer ID')].index:
+        mode_per_group = filled_working_dataframe.groupby(['Customer ID', 'Product ID'])[column].agg(lambda x: x.mode().iloc[0] if not x.mode().empty else np.nan)
+        filled_working_dataframe[column] = filled_working_dataframe.set_index(['Customer ID', 'Product ID'])[column].fillna(mode_per_group).reset_index(drop=True)
+
+    # Проверяем, остались ли пропущенные значения после заполнения
+    print("\nПроверка пропущенных значений после заполнения:")
+    print(filled_working_dataframe.isna().sum())
+    display(filled_working_dataframe.head(4))
+
+
+# In[47]:
+
+
+#2. Проверим на наличие дублирующихся строк
+
+# Создаем копию рабочего датафрейма
+processed_dataframe = working_dataframe.copy()
+
+# Создаем DataFrame без столбца 'Row ID'
+data_without_row_id = processed_dataframe.drop('Row ID', axis=1)
+
+# Проверяем наличие дубликатов
+duplicate_rows = data_without_row_id.duplicated()
+print("Количество дублирующихся строк:", duplicate_rows.sum())
+
+if duplicate_rows.sum() > 0:
+    # Отображаем дублирующиеся строки и оригиналы
+    print("Оригинальные строки и их дубликаты:")
+    
+    for index, row in processed_dataframe[duplicate_rows].iterrows():
+        duplicate_index = processed_dataframe[data_without_row_id.eq(row.drop('Row ID')).all(axis=1)].index[0]
+        original_row = processed_dataframe.loc[duplicate_index]
+        display(pd.concat([original_row.to_frame().T, row.to_frame().T]))
+        
+    # Спрашиваем пользователя, нужно ли удалять дубликаты
+    user_input = input("Хотите удалить дублирующиеся строки? (yes/no): ").strip().lower()
+    
+    if user_input == "yes":
+        processed_dataframe = processed_dataframe[~data_without_row_id.duplicated()]
+        print("Дублирующиеся строки удалены.")
+        
+        # Отображаем обновленный датафрейм
+        print("Обновленный датафрейм:")
+        display(processed_dataframe.head())
+    else:
+        print("Дублирующиеся строки не удалены.")
+else:
+    print("Дублирующихся строк не найдено.")
+
+
+# In[54]:
+
+
+# Вычисляем общее количество выбросов для каждого столбца
+outliers_count = {column: 0 for column in robust_columns}
+
+for product_id in unique_product_ids:
+    product_id_df = processed_dataframe[processed_dataframe['Product ID'] == product_id]
+    
+    unique_customer_ids = product_id_df['Customer ID'].unique()
+    
+    for customer_id in unique_customer_ids:
+        customer_id_df = product_id_df[product_id_df['Customer ID'] == customer_id]
+        
+        for column in robust_columns:        
+            customer_id_outliers = find_outliers_iqr(customer_id_df[column])
+            outliers_count[column] += len(customer_id_outliers)
+
+print("Выбросы по каждому признаку:")
+for column, count in outliers_count.items():
+    print(f"{column}: {count} выбросов")
+
+# Затем спрашиваем, хотим ли мы обработать выбросы
+user_input = input("Вы хотите обработать выбросы? (yes/no): ").strip().lower()
+
+if user_input == "yes":
+    # Если ответ "yes", выполняем основной код обработки выбросов с учетом новой группировки
+    for product_id in unique_product_ids:
+        product_id_df = processed_dataframe[processed_dataframe['Product ID'] == product_id]
+
+        unique_customer_ids = product_id_df['Customer ID'].unique()
+
+        for customer_id in unique_customer_ids:
+            customer_id_df = product_id_df[product_id_df['Customer ID'] == customer_id]
+
+            for column in robust_columns:
+                customer_id_outliers = find_outliers_iqr(customer_id_df[column])
+
+                if len(customer_id_outliers) > 0:
+                    # Робастные статистические показатели для столбца
+                    print(f"Робастные статистические показатели для столбца '{column}', 'Product ID' {product_id} и 'Customer ID' {customer_id}:")
+                    for method in robust_methods:
+                        if method == 'median':
+                            print(f"  Медиана: {customer_id_df[column].median()}")
+                        elif method == 'iqr':
+                            Q1 = customer_id_df[column].quantile(0.25)
+                            Q3 = customer_id_df[column].quantile(0.75)
+                            IQR = Q3 - Q1
+                            print(f"  Межквартильный размах (IQR): {IQR}")
+                        elif method == 'mad':
+                            print(f"  Среднее абсолютное отклонение (MAD): {customer_id_df[column].mad()}")
+
+                    # Применение преобразования (например, логарифмическое) или замена выбросов на моду
+                    transformation_type = input(f"Введите тип преобразования для столбца '{column}', Product ID {product_id} и Customer ID {customer_id} (логарифмическое/замена_на_моду): ").strip().lower()
+
+                    if transformation_type == "логарифмическое":
+                        processed_dataframe.loc[customer_id_df.index, column] = np.log1p(customer_id_df[column])
+                        print(f"Применено логарифмическое преобразование для столбца '{column}', Product ID {product_id} и Customer ID {customer_id}.")
+
+                    elif transformation_type == "замена_на_моду":
+                        mode = customer_id_df[column].mode().iloc[0]
+                        for index in customer_id_outliers.index:
+                            processed_dataframe.at[index, column] = mode
+                        print(f"Выбросы для столбца '{column}', Product ID {product_id} и Customer ID {customer_id} заменены на моду ({mode}).")
+
+                    else:
+                        print("Некорректный тип преобразования. Выбросы оставлены без изменений.")
+
+
+# In[ ]:
+
+
+# 1. Влияние скидок на объем продаж и прибыль: Проверьте, как величина скидки влияет на количество проданных товаров, общий объем продаж и прибыль. Вы можете проанализировать, как разные категории товаров реагируют на скидки, и определить оптимальный размер скидки для каждой категории.
+# 2. Сезонность продаж: Исследуйте, как продажи различаются в течение года, и выявите сезонные паттерны. Вы можете также сравнить сезонные паттерны для разных категорий товаров и регионов.
+# 3. Сравнение продаж между сегментами клиентов: Сравните продажи, прибыль и средний чек между корпоративными, домашними и потребительскими сегментами. Это может помочь вам лучше понять, какие сегменты являются наиболее выгодными, и сконцентрировать маркетинговые усилия.
+# 4. Эффект скорости доставки на возврат товаров: Исследуйте, как способ доставки влияет на частоту возвратов. Это может помочь определить, стоит ли предлагать более быструю доставку как средство для уменьшения количества возвратов.
+# 5. Продажи и прибыль по географическим регионам: Анализируйте продажи, прибыль и средний чек по разным странам и городам. Выявите регионы с наибольшим потенциалом роста и фокусируйте маркетинговые усилия на этих регионах.
+# 6. Влияние категории товара на продажи и прибыль: Анализируйте продажи, прибыль и средний чек по категориям товаров. Вы можете сравнить различные подкатегории и определить, какие из них являются наиболее востребованными и прибыльными.
+# 7. Влияние некоторых персон и регионов на продажи: Исследуйте, как некоторые персоны и регионы, связанные с клиентами, влияют на продажи и прибыль. Выясните, есть ли определенные персоны или регионы, которые приносят больше продаж и прибыли, и используйте эту информацию для определения, стоит ли увеличить взаимодействие с этими группами или регионами.
+# 8. Взаимосвязь между количеством проданного товара и прибылью: Проверьте, как количество проданных единиц товара влияет на прибыль. Это может помочь определить, стоит ли сосредоточиться на продаже меньшего количества более дорогих товаров или большего количества дешевых товаров для максимизации прибыли.
+# 9. Влияние наличия возвратов на продажи и прибыль: Проанализируйте, как наличие возвратов влияет на общий объем продаж и прибыль. Определите, есть ли определенные категории товаров, которые чаще возвращаются, и предпримите меры для уменьшения возвратов в этих категориях.
+# 10. Эффективность маркетинговых акций: Если у вас есть информация о маркетинговых акциях, связанных с данными о продажах, вы можете анализировать их эффективность, сравнивая продажи и прибыль до и после проведения акции. Это может помочь определить, какие маркетинговые стратегии наиболее эффективны для разных категорий товаров и сегментов клиентов.
+# 11. Влияние дня недели и времени суток на продажи: Анализируйте объем продаж и прибыль в зависимости от дня недели и времени суток. Это может помочь определить наиболее активные часы и дни для продаж, что позволит улучшить планирование рекламных кампаний и других маркетинговых активностей.
+# 12. Возвраты и способ доставки: Исследуйте взаимосвязь между способом доставки и количеством возвратов. Определите, есть ли какая-то связь между быстротой доставки и вероятностью возврата товара клиентом.
+# 13. Частота повторных покупок: Анализируйте, как часто клиенты совершают повторные покупки, и определите, влияет ли это на их средний чек и общую прибыль. Это может помочь выявить возможности для улучшения удержания клиентов и повышения их лояльности.
+# 14. Влияние отзывов на продажи: Если у вас есть доступ к данным об отзывах клиентов, вы можете проанализировать, как отзывы влияют на продажи товаров. Выявите, есть ли корреляция между количеством положительных отзывов и объемом продаж.
+# 15. Распределение продаж по ценовым категориям: Исследуйте, как продажи распределяются между дешевыми, средними и дорогими товарами. Это может помочь определить оптимальный ассортимент товаров для максимизации прибыли.
+# 16. Влияние активности конкурентов на продажи: Если у вас есть доступ к данным о деятельности конкурентов, вы можете проанализировать, как изменения в их маркетинговых кампаниях, ассортименте товаров или ценовой политике влияют на ваш объем продаж и прибыль.
+# 17. Влияние продаж на запасы: Исследуйте, как продажи влияют на запасы товаров, и определите оптимальные уровни запасов для разных категорий товаров. Это может помочь улучшить управление запасами и снизить издержки на хранение товаров.
+# 18. Анализ продаж по каналам распространения: Если у вас есть данные о каналах распространения товаров (например, онлайн, офлайн, через партнеров), проанализируйте, какой канал приносит наибольший объем продаж и прибыль. Это поможет определить, какие каналы распространения следует развивать в приоритетном порядке.
+# 19. Влияние кросс-продаж на прибыль: Исследуйте, как продажа сопутствующих товаров (например, аксессуаров к технике или дополнительных услуг) влияет на прибыль. Выявите возможности для увеличения прибыли за счет кросс-продаж.
+# 20. Влияние маркетинговых кампаний на продажи по сегментам: Исследуйте, как различные маркетинговые кампании влияют на продажи в разных сегментах клиентов (корпоративные, домашние, потребительские). Это поможет определить, какие кампании и стратегии маркетинга наиболее эффективны для каждого сегмента.
+# 21. Влияние цены на продажи и прибыль: Анализируйте, как изменение цен на товары влияет на объем продаж и прибыль. Выявите оптимальные ценовые стратегии для разных категорий товаров и сегментов клиентов.
+# 22. Влияние новых товаров на продажи и прибыль: Исследуйте, как внедрение новых товаров в ассортимент влияет на продажи и прибыль. Это может помочь определить, какие товары стоит добавить в ассортимент и какие товары следует снять с продажи.
+# 23. Влияние обучения и поддержки клиентов на продажи и прибыль: Если у вас есть данные об обучении и поддержке клиентов, проанализируйте, как они влияют на продажи и прибыль. Выявите возможности для улучшения обучения и поддержки, которые могут привести к увеличению продаж и прибыли.
+
+
+# In[62]:
+
+
+# H1. Влияние скидок на объем продаж и прибыль
+
+# Создание списков для хранения результатов
+significant_results = []
+intervals = [(0.0, 0.1), (0.1, 0.2), (0.2, 0.3), (0.3, 0.4), (0.4, 0.5)]
+
+# Выполнение тестов Манна-Уитни и сохранение значимых результатов
+for i, discount1 in enumerate(discount_levels[:-1]):
+    for discount2 in discount_levels[i + 1:]:
+        # ... (остальной код остается неизменным)
+
+        if p_value_sales < alpha:
+            result = {
+                "discount1": discount1,
+                "discount2": discount2,
+                "p_value_sales": p_value_sales,
+                "p_value_profit": p_value_profit
+            }
+            significant_results.append(result)
+
+# Вывод значимых результатов, сгруппированных по интервалам p-value
+print("Гипотеза: Влияние скидок на объем продаж и прибыль")
+print("Интерпретация: Различные уровни скидок могут влиять на объем продаж и прибыль компании.")
+print("\nЗначимые различия между уровнями скидок, сгруппированные по интервалам p-value:")
+
+for interval in intervals:
+    print(f"\nИнтервал p-value: {interval[0]:.1f} - {interval[1]:.1f}")
+    interval_results = [result for result in significant_results if interval[0] <= result["p_value_sales"] < interval[1]]
+
+    if interval_results:
+        print("  Найдены значимые различия в этом интервале p-value, гипотеза не верна:")
+        for result in interval_results:
+            print(f"    Скидки {result['discount1']:.2f} и {result['discount2']:.2f}:")
+            print(f"      p-value продаж: {result['p_value_sales']:.4f}")
+            print(f"      p-value прибыли: {result['p_value_profit']:.4f}")
+    else:
+        print("  Нет значимых различий в этом интервале p-value, гипотеза верна.")
+        
+# Построение графиков после выполнения всех тестов Манна-Уитни
+
+plt.figure(figsize=(12, 6))
+
+plt.subplot(1, 2, 1)
+sns.boxplot(x='Discount', y='Average Sales', data=aggregated_data)
+plt.xticks([i for i in range(len(discount_levels))], [f"{discount:.2f}" for discount in discount_levels])
+plt.title('Сравнение средних продаж для каждого уровня скидки')
+
+plt.subplot(1, 2, 2)
+sns.boxplot(x='Discount', y='Average Profit', data=aggregated_data)
+plt.xticks([i for i in range(len(discount_levels))], [f"{discount:.2f}" for discount in discount_levels])
+plt.title('Сравнение средней прибыли для каждого уровня скидки')
+
+plt.show()  
+
+
+# In[69]:
+
+
+# ГИПОТЕЗА №2 old ver Сезонность продаж в разрезе даты заказа
+
+from statsmodels.tsa.stattools import adfuller
+from statsmodels.graphics.tsaplots import plot_acf
+import matplotlib.dates as mdates
+
+# Добавление нового столбца с месяцем заказа
+processed_dataframe['Order Month'] = processed_dataframe['Order Date'].dt.to_period('M')
+
+# Агрегирование данных по месяцам
+monthly_sales = processed_dataframe.groupby('Order Month').agg({'Sales': 'sum', 'Profit': 'sum'}).reset_index()
+
+# Преобразование столбца 'Order Month' в строковый формат
+monthly_sales['Order Month'] = monthly_sales['Order Month'].astype(str)
+
+# Визуализация продаж и прибыли по месяцам
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+
+sns.lineplot(x='Order Month', y='Sales', data=monthly_sales, ax=ax1)
+ax1.set_title('Ежемесячные продажи')
+ax1.xaxis.set_major_locator(mdates.MonthLocator(interval=4))
+ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+plt.setp(ax1.xaxis.get_majorticklabels(), rotation=45)
+
+sns.lineplot(x='Order Month', y='Profit', data=monthly_sales, ax=ax2)
+ax2.set_title('Ежемесячная прибыль')
+ax2.xaxis.set_major_locator(mdates.MonthLocator(interval=4))
+ax2.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45)
+
+plt.show()
+
+# Проверка стационарности ряда с помощью теста Дики-Фуллера
+adf_test_result = adfuller(monthly_sales['Sales'])
+print(f"ADF Statistic: {adf_test_result[0]}")
+print(f"p-value: {adf_test_result[1]}")
+
+# Если p-value меньше 0.05, то ряд стационарный
+if adf_test_result[1] < 0.05:
+    print("Ряд продаж стационарный")
+else:
+    print("Ряд продаж не стационарный")
+
+# Построение графика автокорреляции
+fig, ax = plt.subplots(figsize=(10, 5))
+plot_acf(monthly_sales['Sales'], ax=ax)
+plt.show()
+
+# Построение графика автокорреляции
+fig, ax = plt.subplots(figsize=(10, 5))
+acf_plot = plot_acf(monthly_sales['Sales'], ax=ax)
+plt.show()
+
+# Определение значимых лагов автокорреляции
+lags_with_significant_correlation = []
+confidence_interval = 1.96 / np.sqrt(len(monthly_sales['Sales']))
+for i, v in enumerate(acf_plot[0]):
+    if v > confidence_interval[i]:
+        lags_with_significant_correlation.append(i)
+        
+# Интерпретация результатов
+print("Гипотеза H2: Сезонность продаж в разрезе даты заказа.")
+print("Интерпретация: Продажи могут быть сезонными, и их объем может колебаться в зависимости от времени года.")
+
+print("\nРезультаты теста Дики-Фуллера:")
+if adf_test_result[1] < 0.05:
+    print("  Ряд продаж стационарный (p-value < 0.05).")
+else:
+    print("  Ряд продаж не стационарный (p-value >= 0.05).")
+
+print("\nРезультаты анализа автокорреляции:")
+if lags_with_significant_correlation:
+    print("  Найдены лаги с значимой автокорреляцией, что указывает на наличие автокорреляции и возможную сезонность:")
+    for lag in lags_with_significant_correlation:
+        print(f"    Лаг: {lag}")
+else:
+    print("  Не найдено лагов с значимой автокорреляцией, что указывает на отсутствие автокорреляции и сезонности.")
+
+if adf_test_result[1] >= 0.05 and lags_with_significant_correlation:
+    print("\nОбщий вывод: Ряд продаж не стационарный и обнаружена автокорреляция, что подтверждает сезонность продаж. Гипотеза H2 верна.")
+else:
+    print("\nОбщий вывод: Ряд продаж стационарный или не обнаружена автокорреляция, что опровергает сезонность продаж. Гипотеза H2 не верна.")
+
+
+# In[86]:
+
+
+import numpy as np
+from statsmodels.tsa.stattools import adfuller
+from statsmodels.tsa.stattools import acf
+import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Добавляем новый столбец для месяца заказа
+processed_dataframe['Order Month'] = processed_dataframe['Order Date'].dt.to_period('M')
+
+# Агрегируем данные по месяцам
+monthly_sales = processed_dataframe.groupby('Order Month').agg({'Sales': 'sum', 'Profit': 'sum'}).reset_index()
+
+# Преобразуем столбец 'Order Month' к строковому формату
+monthly_sales['Order Month'] = monthly_sales['Order Month'].astype(str)
+
+# Визуализируем продажи и прибыль по месяцам
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+
+sns.lineplot(x='Order Month', y='Sales', data=monthly_sales, ax=ax1)
+ax1.set_title('Ежемесячные продажи')
+ax1.xaxis.set_major_locator(mdates.MonthLocator(interval=4))
+ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+plt.setp(ax1.xaxis.get_majorticklabels(), rotation=45)
+
+sns.lineplot(x='Order Month', y='Profit', data=monthly_sales, ax=ax2)
+ax2.set_title('Ежемесячная прибыль')
+ax2.xaxis.set_major_locator(mdates.MonthLocator(interval=4))
+ax2.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45)
+
+plt.show()
+
+# Проверяем стационарность временного ряда продаж с помощью теста Дики-Фуллера
+adf_test_result = adfuller(monthly_sales['Sales'])
+print(f"ADF-статистика: {adf_test_result[0]}")
+print(f"p-значение: {adf_test_result[1]}")
+
+# Если p-значение меньше 0.05, то ряд стационарен
+if adf_test_result[1] < 0.05:
+    print("Временной ряд продаж является стационарным.")
+else:
+    print("Временной ряд продаж не является стационарным.")
+
+# Визуализируем автокорреляционную функцию
+acf_values, confint = acf(monthly_sales['Sales'], nlags=20, alpha=0.05)[0:2]
+fig, ax = plt.subplots(figsize=(10, 5))
+ax.bar(range(len(acf_values)), acf_values, width=0.1, color='b')
+ax.axhline(y=confint[0][1], linestyle='--', color='gray')
+ax.axhline(y=confint[1][1], linestyle='--', color='gray')
+ax.set_xlabel('Лаг')
+ax.set_ylabel('Коэффициент автокорреляции')
+ax.set_title('Автокорреляционная функция')
+
+plt.show()
+
+# Check the stationarity of the sales series using the Dickey-Fuller test
+adf_test_result = adfuller(monthly_sales['Sales'])
+print(f"ADF Statistic: {adf_test_result[0]}")
+print(f"p-value: {adf_test_result[1]}")
+
+# Если p-value меньше 0.05, то временной ряд стационарный
+if adf_test_result[1] < 0.05:
+    print("Временной ряд продаж является стационарным.")
+else:
+    print("Временной ряд продаж не является стационарным.")
+
+from statsmodels.tsa.stattools import acf
+
+# Построить функцию автокорреляции
+acf_values, confint = acf(monthly_sales['Sales'], nlags=20, alpha=0.05)
+fig, ax = plt.subplots(figsize=(10, 5))
+ax.bar(range(len(acf_values)), acf_values, width=0.1, color='b')
+ax.axhline(y=confint[0][1], linestyle='--', color='gray')
+ax.axhline(y=confint[1][1], linestyle='--', color='gray')
+ax.set_xlabel('Лаг')
+ax.set_ylabel('Автокорреляция')
+ax.set_title('Функция автокорреляции')
+plt.show()
+
+# Определить значимые лаги функции автокорреляции
+lags_with_significant_correlation = []
+confidence_interval = 1.96 / np.sqrt(len(monthly_sales['Sales']))
+for i, v in enumerate(acf_values):
+    if v > confidence_interval:
+        lags_with_significant_correlation.append(i)
+        
+# Interpret the results
+print("Гипотеза H2: Сезонность продаж по дате заказа.")
+print("Интерпретация: Продажи могут быть сезонными, и их объем может меняться в зависимости от времени года.")
+
+print("\nРезультаты теста Дики-Фуллера:")
+if adf_test_result[1] < 0.05:
+    print("  Временной ряд продаж является стационарным (p-value < 0.05).")
+else:
+    print("  Временной ряд продаж не является стационарным (p-value >= 0.05).")
+
+print("\nРезультаты анализа автокорреляции:")
+if lags_with_significant_correlation:
+    print("  Найдены значимые лаги функции автокорреляции, указывающие на наличие автокорреляции и возможную сезонность:")
+    for lag in lags_with_significant_correlation:
+        print(f"    Лаг: {lag}")
+else:
+    print("  Значимые лаги функции автокорреляции не найдены, что указывает на отсутствие автокорреляции и сезонности.")
+
