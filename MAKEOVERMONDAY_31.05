@@ -1,0 +1,119 @@
+import pandas as pd
+from collections import Counter
+from difflib import SequenceMatcher
+import numpy as np
+import time
+!pip install pandas openpyxl
+
+# Загрузка данных из xlsx-файла
+data = pd.read_excel(r'C:\Users\k.tarasov\PycharmProjects\MAKEOVERMONDAY\makeovermonday-2023w22\makeovermonday-2023w22\KTarasov\NYC_Dog_Licensing_Dataset.xlsx')
+new_data = pd.read_excel(r'C:\Users\k.tarasov\PycharmProjects\MAKEOVERMONDAY\makeovermonday-2023w22\makeovermonday-2023w22\KTarasov\Dog_Bites_Data.xlsx')  # Укажите путь к вашему новому датасету
+
+# Создание копии исходного датасета
+data_copy = data.copy()
+new_data_copy = new_data.copy()
+
+# Удаление строк с пропущенными значениями
+data_cleaned = data_copy.dropna()
+new_data_cleaned = new_data_copy.dropna()
+
+# Функция для вычисления степени сходства между двумя именами пород
+def similarity_score(name1, name2):
+    if isinstance(name1, str) and isinstance(name2, str):
+        return SequenceMatcher(None, name1, name2).ratio()
+    else:
+        return np.nan
+
+# Объединение пробелов и слэшей в именах пород
+data_copy.loc[:, 'breedName_new'] = data_cleaned['BreedName'].str.replace('Mix', '').str.replace('Terrier', '').str.replace('Crossbreed', '').str.replace('  / ', '/').str.replace(' /', '/')
+new_data_copy.loc[:, 'breedName_new'] = new_data_cleaned['Breed'].str.replace('Mix', '').str.replace('Terrier', '').str.replace('Crossbreed', '').str.replace('  / ', '/').str.replace(' /', '/')
+
+# Подсчет наиболее часто повторяющихся имен на основе столбца "breedName_new"
+name_counts = Counter(data_copy['breedName_new'])
+new_name_counts = Counter(new_data_copy['breedName_new'])
+
+# Пустой словарь для хранения групп пород
+name_groups = {}
+
+# Определение групп пород с похожими именами
+for name in name_counts.keys():
+    found_group = False
+    for group in name_groups.keys():
+        # Вычисление степени сходства между именем и каждой группой
+        similarity = similarity_score(name, group)
+        if similarity > 0.8:  # Пороговое значение для сходства (80%)
+            name_groups[group].append(name)
+            found_group = True
+            break
+    if not found_group:
+        name_groups[name] = [name]
+
+# Засекаем время перед выполнением алгоритма
+start_time = time.time()
+
+# Создание словаря для хранения количества уникальных пород и уникальных значений в каждой группе
+group_breed_counts = {}
+group_unique_counts = {}
+
+# Обработка данных первого датасета
+data_cleaned = data_cleaned.assign(cleaned_breed_name=data_cleaned['BreedName'].str.replace('Mix', '').str.replace('Terrier', '').str.replace('Crossbreed', '').str.replace('  / ', '/').str.replace(' /', '/'))
+
+for group, names in name_groups.items():
+    unique_breeds = set()
+    unique_values = set()
+
+    for name in names:
+        unique_breeds.update(data_cleaned.loc[data_cleaned['cleaned_breed_name'] == name, 'BreedName'])
+        unique_values.update(data_cleaned.loc[data_cleaned['cleaned_breed_name'] == name, 'Unique'])
+
+    group_breed_counts[group] = len(unique_breeds)
+    group_unique_counts[group] = len(unique_values)
+
+# Обработка данных второго датасета
+new_data_cleaned = new_data_cleaned.assign(cleaned_breed_name=new_data_cleaned['Breed'].str.replace('Mix', '').str.replace('Terrier', '').str.replace('Crossbreed', '').str.replace('  / ', '/').str.replace(' /', '/'))
+
+for group, names in name_groups.items():
+    unique_breeds = set()
+    unique_values = set()
+
+    for name in names:
+        unique_breeds.update(new_data_cleaned.loc[new_data_cleaned['cleaned_breed_name'] == name, 'Breed'])
+        unique_values.update(new_data_cleaned.loc[new_data_cleaned['cleaned_breed_name'] == name, 'UniqueID'])
+
+    group_breed_counts[group] = len(unique_breeds)
+    group_unique_counts[group] = len(unique_values)
+
+# Вычисляем время выполнения
+end_time = time.time()
+execution_time = end_time - start_time
+
+# Выводим время выполнения
+print(f"Время выполнения: {execution_time} секунд")
+
+total_groups = len(name_groups)
+print(f"Общее количество групп: {total_groups}")
+
+# Вывод результатов
+print("Группы пород с похожими именами:")
+for group, names in name_groups.items():
+    unique_breeds = set()  # Множество для хранения уникальных пород
+    unique_values = set()  # Множество для хранения уникальных значений в столбце "Unique"
+    
+    for name in names:
+        unique_breeds.update(data_cleaned.loc[data_cleaned['cleaned_breed_name'] == name, 'BreedName'])  # Добавление уникальных пород в множество
+        unique_values.update(data_cleaned.loc[data_cleaned['cleaned_breed_name'] == name, 'Unique'])  # Добавление уникальных значений в множество
+    
+    breed_count = group_breed_counts[group]  # Получение количества уникальных пород в группе
+    unique_count = group_unique_counts[group]  # Получение количества уникальных значений в группе
+    
+    print(f"Группа: {group} (Количество уникальных пород: {breed_count}, Количество уникальных значений: {unique_count})")
+    for name in names:
+        print(f" - {name}")
+
+# Сохранение результатов в новые Excel-файлы
+output1_file = r'C:\Users\k.tarasov\PycharmProjects\MAKEOVERMONDAY\makeovermonday-2023w22\makeovermonday-2023w22\KTarasov\NYC_Dog_Licensing_output1.xlsx'
+output2_file = r'C:\Users\k.tarasov\PycharmProjects\MAKEOVERMONDAY\makeovermonday-2023w22\makeovermonday-2023w22\KTarasov\NYC_Dog_Licensing_output2.xlsx'
+
+data_cleaned.to_excel(output1_file, index=False)
+new_data_cleaned.to_excel(output2_file, index=False)
+
