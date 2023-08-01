@@ -1,0 +1,187 @@
+import requests
+from PyQt5.QtWidgets import QApplication, QWidget, QLineEdit, QTextEdit, QPushButton, QVBoxLayout, QLabel, QMenu, \
+    QActionGroup, QMenuBar, QMainWindow, QShortcut, QHBoxLayout
+from PyQt5.QtGui import QFont, QKeySequence
+from PyQt5.QtCore import Qt
+import openai
+from flask import Flask, request, jsonify
+import threading
+
+# Backend Part
+INPUT_TOKEN_COST = 0.0015 / 1000
+OUTPUT_TOKEN_COST = 0.002 / 1000
+
+flask_app = Flask(__name__)
+openai.api_key = None
+
+@flask_app.route('/query', methods=['POST'])
+def query_model():
+    model_version = request.json.get('model_version')
+    model_map = {
+        "gpt3": "gpt-3.5-turbo",
+        "gpt4": "gpt-4"
+    }
+    try:
+        prompt = request.json.get('prompt')
+        messages = [{"role": "user", "content": prompt}]
+        response = openai.ChatCompletion.create(
+            model=model_map.get(model_version, "gpt-3.5-turbo"),
+            messages=messages
+        )
+        return jsonify(text=response.choices[0].message['content'].strip(), usage=response['usage'])
+    except KeyError:
+        print("Error: 'usage' key is not found in the response:", response)
+        return jsonify(error="'usage' key not found in the response.")
+    except Exception as e:
+        print("Error:", e)
+        return jsonify(error=str(e))
+
+
+def start_flask_app():
+    flask_app.run()
+
+threading.Thread(target=start_flask_app).start()
+
+class CustomTextEdit(QTextEdit):
+    def __init__(self, parent=None):
+        super(CustomTextEdit, self).__init__(parent)
+
+    def insertFromMimeData(self, source):
+        plain_text = source.text()
+        self.insertPlainText(plain_text)
+
+class App(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.model_version = "gpt3"
+        self.output_token_cost = OUTPUT_TOKEN_COST
+        self.init_ui()
+
+    def init_ui(self):
+        central_widget = QWidget(self)
+        self.setCentralWidget(central_widget)
+
+        self.api_key_input = QLineEdit(self)
+        self.api_key_input.setPlaceholderText("Enter your OpenAI API key")
+        self.api_key_input.textChanged.connect(self.update_api_key)
+
+        self.token_count_label = QLabel("Cost: $0.00 | Text length: 0", self)
+
+        font = QFont("Arial", 8)
+
+        self.input_text = CustomTextEdit(self)
+        self.input_text.setFont(font)
+        self.input_text.textChanged.connect(self.update_current_cost_and_length)
+
+        self.output_text_1 = CustomTextEdit(self)
+        self.output_text_1.setFont(font)
+
+        self.clarifying_question_input = QLineEdit(self)
+        self.clarifying_question_input.setPlaceholderText("Enter a clarifying question if needed...")
+        self.clarifying_question_input.returnPressed.connect(self.get_summary)
+
+        self.submit_button_1 = QPushButton('Simplify', self)
+        self.submit_button_2 = QPushButton('←', self)
+
+        self.submit_button_1.clicked.connect(self.get_structure)
+        self.submit_button_2.clicked.connect(self.get_summary)
+
+        menubar = self.menuBar()
+        model_menu = menubar.addMenu('Model')
+        gpt3_action = model_menu.addAction("ChatGPT3")
+        gpt3_action.setCheckable(True)
+        gpt3_action.setChecked(True)
+        gpt3_action.setShortcut(QKeySequence("Alt+3"))
+        gpt3_action.triggered.connect(lambda: self.set_model_version("gpt3"))
+
+        gpt4_action = model_menu.addAction("ChatGPT4")
+        gpt4_action.setCheckable(True)
+        gpt4_action.setShortcut(QKeySequence("Alt+4"))
+        gpt4_action.triggered.connect(lambda: self.set_model_version("gpt4"))
+
+        action_group = QActionGroup(model_menu)
+        action_group.addAction(gpt3_action)
+        action_group.addAction(gpt4_action)
+
+        clarifying_layout = QHBoxLayout()
+        clarifying_layout.addWidget(self.clarifying_question_input)
+        clarifying_layout.addWidget(self.submit_button_2)
+
+        layout = QVBoxLayout(central_widget)
+        layout.addWidget(self.api_key_input)
+        layout.addWidget(self.token_count_label)
+        layout.addWidget(self.input_text)
+        layout.addWidget(self.submit_button_1)
+        layout.addWidget(self.output_text_1)
+        layout.addLayout(clarifying_layout)
+        central_widget.setLayout(layout)
+
+        self.shortcut_gpt3 = QShortcut(QKeySequence("Alt+3"), self)
+        self.shortcut_gpt3.activated.connect(lambda: self.set_model_version("gpt3"))
+
+        self.shortcut_gpt4 = QShortcut(QKeySequence("Alt+4"), self)
+        self.shortcut_gpt4.activated.connect(lambda: self.set_model_version("gpt4"))
+
+        self.setFixedSize(250, 300)
+
+    def set_model_version(self, version):
+        self.model_version = version
+        if version == "gpt3":
+            self.setWindowTitle("ChadGPTv.3")
+        else:
+            self.setWindowTitle("ChadGPTv.4")
+        self.update_current_cost_and_length()
+        self.token_count_label.repaint()
+
+    def update_api_key(self):
+        new_api_key = self.api_key_input.text()
+        openai.api_key = new_api_key
+
+    def update_current_cost_and_length(self):
+        text_length = len(self.input_text.toPlainText())
+        if self.model_version == "gpt4":
+            current_cost = text_length / 2.5 * (INPUT_TOKEN_COST * 2)
+        else:
+            current_cost = text_length / 2.5 * INPUT_TOKEN_COST
+        self.token_count_label.setText(
+            f"Cost: ${current_cost:.4f} | Length: {text_length}")
+
+    def get_structure(self):
+        prompt = f"Структурируй по пунктам и сделай понятным даже ребенку: {self.input_text.toPlainText()}"
+        response, tokens_info = self.query_api(prompt)
+        input_tokens, output_tokens = tokens_info
+        self.output_text_1.setPlainText(response)
+        self.update_token_count_and_cost(input_tokens, output_tokens)
+
+    def get_summary(self):
+        prompt = f"Что вы имели в виду под: '{self.clarifying_question_input.text()}' в контексте: {self.input_text.toPlainText()}"
+        response, tokens_info = self.query_api(prompt)
+        input_tokens, output_tokens = tokens_info
+        self.output_text_1.setPlainText(response)
+        self.update_token_count_and_cost(input_tokens, output_tokens)
+
+    def query_api(self, prompt):
+        try:
+            response = requests.post('http://localhost:5000/query', json={
+                'prompt': prompt,
+                'model_version': self.model_version
+            }).json()
+            return response.get('text', ''), (response['usage']['total_tokens'], response['usage']['prompt_tokens'])
+        except Exception as e:
+            return str(e), (0, 0)
+
+    def update_token_count_and_cost(self, input_tokens, output_tokens):
+        total_tokens = input_tokens + output_tokens
+        if self.model_version == "gpt4":
+            current_cost = total_tokens * (self.output_token_cost * 2)
+        else:
+            current_cost = total_tokens * self.output_token_cost
+        self.token_count_label.setText(
+            f"Used: {total_tokens} tokens | Cost: ${current_cost:.4f} | Input length: {input_tokens} tokens")
+
+
+if __name__ == '__main__':
+    app = QApplication([])
+    window = App()
+    window.show()
+    app.exec_()
