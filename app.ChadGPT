@@ -1,0 +1,295 @@
+import requests
+from PyQt5.QtWidgets import QApplication, QWidget, QLineEdit, QTextEdit, QPushButton, QVBoxLayout, QLabel, \
+    QActionGroup, QMainWindow, QHBoxLayout, QComboBox, QToolButton, QMessageBox, QInputDialog, QDialog, QFormLayout, QDoubleSpinBox, QDialogButtonBox
+from PyQt5.QtGui import QFont, QKeySequence
+from PyQt5.QtCore import Qt, QSettings
+import openai
+from flask import Flask, request, jsonify
+import threading
+# Backend Part
+INPUT_TOKEN_COST = 0.0015 / 1000
+OUTPUT_TOKEN_COST = 0.002 / 1000
+flask_app = Flask(__name__)
+openai.api_key = None
+@flask_app.route('/query', methods=['POST'])
+def query_model():
+    model_version = request.json.get('model_version')
+    model_map = {
+        "gpt3": "gpt-3.5-turbo",
+        "gpt4": "gpt-4"
+    }
+    try:
+        prompt = request.json.get('prompt')
+        messages = [{"role": "user", "content": prompt}]
+        response = openai.ChatCompletion.create(
+            model=model_map.get(model_version, "gpt-3.5-turbo"),
+            messages=messages
+        )
+        return jsonify(text=response.choices[0].message['content'].strip(), usage=response['usage'])
+    except KeyError:
+        print("Error: 'usage' key is not found in the response:", response)
+        return jsonify(error="'usage' key not found in the response.")
+    except Exception as e:
+        print("Error:", e)
+        return jsonify(error=str(e))
+def start_flask_app():
+    flask_app.run()
+threading.Thread(target=start_flask_app).start()
+class CustomTextEdit(QTextEdit):
+    def __init__(self, placeholderText, isInput=True, parent=None):
+        super(CustomTextEdit, self).__init__(parent)
+        self.isPlaceholderShown = True
+        self.isInput = isInput
+        self.placeholderText = placeholderText
+        self.setPlaceholder(True)
+    def setInactiveStyle(self):
+        self.setStyleSheet("background-color: #E0E0E0;")  # Изменен цвет на другой оттенок серого
+    def setActiveStyle(self):
+        self.setStyleSheet("background-color: #FFFFFF;")  # Белый цвет фона
+    def focusInEvent(self, event):
+        if self.isInput and self.isPlaceholderShown:
+            self.clear()
+            self.setPlaceholder(False)
+        super().focusInEvent(event)
+        parent_widget = self.parent()
+        while not isinstance(parent_widget, App) and parent_widget is not None:
+            parent_widget = parent_widget.parent()
+        if parent_widget is not None:
+            parent_widget.active_widget = self
+        self.setActiveStyle()
+    def focusOutEvent(self, event):
+        if self.isInput and not self.toPlainText():
+            self.setPlaceholder(True)
+        super().focusOutEvent(event)
+        self.setInactiveStyle()
+    def insertFromMimeData(self, source):
+        if self.isPlaceholderShown:
+            self.clear()
+            self.setPlaceholder(False)
+        plain_text = source.text()
+        self.insertPlainText(plain_text)
+    def setPlaceholder(self, value):
+        self.isPlaceholderShown = value
+        if value:
+            self.setHtml(f'<span style="color:#999;">{self.placeholderText}</span>')
+        else:
+            self.clear()
+    def keyPressEvent(self, event):
+        if self.isInput and event.key() == Qt.Key_Return and event.modifiers() == Qt.ShiftModifier:
+            parent_widget = self.parent()
+            while not isinstance(parent_widget, App) and parent_widget is not None:
+                parent_widget = parent_widget.parent()
+            if parent_widget is not None:
+                parent_widget.get_structure()
+        else:
+            super().keyPressEvent(event)
+class App(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.settings = QSettings('YourApp', 'ChadGPT')
+        self.api_keys = self.settings.value('api_keys', [])
+        self.model_version = "gpt3"
+        self.output_token_cost = self.settings.value('output_token_cost', OUTPUT_TOKEN_COST, type=float)
+        self.input_token_cost = INPUT_TOKEN_COST
+        self.input_token_cost = self.settings.value('input_token_cost', INPUT_TOKEN_COST, type=float)
+        self.init_ui()
+        self.active_widget = self.input_text  # По умолчанию установим экран ввода активным
+        self.text_edit = CustomTextEdit(self)
+        self.text_edit.setInactiveStyle()
+    def init_ui(self):
+        central_widget = QWidget(self)
+        self.setCentralWidget(central_widget)
+        self.api_key_combo = QComboBox(self)
+        self.api_key_combo.setEditable(True)  # делаем комбо-бокс редактируемым
+        self.api_key_combo.setPlaceholderText("Enter your OpenAI API key")
+        self.api_key_combo.lineEdit().textChanged.connect(self.update_api_key)
+        self.api_key_combo.addItems(self.api_keys)  # добавляем сохраненные ключи
+        self.api_key_combo.activated[str].connect(self.on_key_selected)  # слот для выбора ключа
+        self.delete_button = QToolButton(self)
+        self.delete_button.setText("X")
+        self.delete_button.clicked.connect(self.delete_selected_key)
+        self.delete_button.setFixedSize(22, 22)  # Устанавливает размер кнопки 22x22 пикселей
+        self.delete_button.setStyleSheet("font-size: 8px;")  # Устанавливает размер шрифта иконки "X" в 8 пикселей
+        api_key_layout = QHBoxLayout()
+        api_key_layout.addWidget(self.api_key_combo)
+        api_key_layout.addWidget(self.delete_button)
+        self.token_count_label = QLabel("Cost: $0.00 | Length: 0", self)
+        font = QFont("Arial", 8)
+        self.input_text = CustomTextEdit("Enter your text...", True, self)
+        self.input_text.setFont(font)
+        self.input_text.textChanged.connect(self.update_current_cost_and_length)
+        self.output_text_1 = CustomTextEdit("Your result will be here...", False, self)
+        self.output_text_1.setFont(font)
+        self.clarifying_question_input = QLineEdit(self)
+        self.clarifying_question_input.setPlaceholderText("Enter a clarifying question if needed...")
+        self.clarifying_question_input.returnPressed.connect(self.get_summary)
+        self.clarifying_question_input.textChanged.connect(self.update_clarifying_question)
+        self.submit_button_1 = QPushButton('SIMPLIFY', self)
+        self.submit_button_2 = QPushButton('←', self)
+        self.submit_button_2.setFixedSize(22, 22)  # Устанавливает размер кнопки 22x22 пикселей
+        self.submit_button_2.setStyleSheet("font-size: 8px;")  # Устанавливает размер шрифта иконки "X" в 8 пикселей
+        self.submit_button_1.clicked.connect(self.get_structure)
+        self.submit_button_2.clicked.connect(self.get_summary)
+        # Меню сверху
+        menubar = self.menuBar()
+        # МОДЕЛЬ
+        model_menu = menubar.addMenu('Model')
+        # GPT3
+        gpt3_action = model_menu.addAction("ChatGPT3")
+        gpt3_action.setCheckable(True)
+        gpt3_action.setChecked(True)
+        gpt3_action.setShortcut(QKeySequence("Alt+3"))
+        gpt3_action.triggered.connect(lambda: self.set_model_version("gpt3"))
+        #GPT4
+        gpt4_action = model_menu.addAction("ChatGPT4")
+        gpt4_action.setCheckable(True)
+        gpt4_action.setShortcut(QKeySequence("Alt+4"))
+        gpt4_action.triggered.connect(lambda: self.set_model_version("gpt4"))
+        #EDIT
+        edit_menu = self.menuBar().addMenu('Edit')
+        simplify_action = edit_menu.addAction("Change Clarifying Question")
+        simplify_action.setShortcut(QKeySequence("Alt+1"))
+        simplify_action.triggered.connect(self.show_clarifying_question_input_dialog)
+        # Действие для новой кнопки "Price"
+        price_action = edit_menu.addAction("Price")
+        price_action.setShortcut(QKeySequence("Alt+2"))
+        price_action.triggered.connect(self.on_price_clicked)  # Подключите к нужной функции
+        action_group = QActionGroup(model_menu)
+        action_group.addAction(gpt3_action)
+        action_group.addAction(gpt4_action)
+        clarifying_layout = QHBoxLayout()
+        clarifying_layout.addWidget(self.clarifying_question_input)
+        clarifying_layout.addWidget(self.submit_button_2)
+        layout = QVBoxLayout(central_widget)
+        layout.addLayout(api_key_layout)
+        layout.addWidget(self.token_count_label)
+        layout.addWidget(self.input_text)
+        layout.addWidget(self.submit_button_1)
+        layout.addWidget(self.output_text_1)
+        layout.addLayout(clarifying_layout)
+        central_widget.setLayout(layout)
+        self.setFixedSize(300, 300)
+    def show_clarifying_question_input_dialog(self):
+        question, ok = QInputDialog.getText(self, 'Clarifying Question', 'Enter your clarifying question:')
+        if ok:
+             self.clarifying_question_input.setText(question)
+    def on_key_selected(self, key):
+        self.api_key_combo.setCurrentText(key)
+    def update_api_key(self):
+        new_api_key = self.api_key_combo.currentText()  # Изменено на currentText
+        openai.api_key = new_api_key
+        if new_api_key and new_api_key not in self.api_keys:
+            self.api_keys.append(new_api_key)
+            self.settings.setValue('api_keys', self.api_keys)
+            if self.api_key_combo.findText(new_api_key) == -1:
+                self.api_key_combo.addItem(new_api_key)
+    def delete_selected_key(self):
+        current_key = self.api_key_combo.currentText()
+        if current_key in self.api_keys:
+            self.api_keys.remove(current_key)
+            self.settings.setValue('api_keys', self.api_keys)
+            index = self.api_key_combo.findText(current_key)
+            self.api_key_combo.removeItem(index)
+            self.api_key_combo.lineEdit().clear()
+    def set_model_version(self, version):
+        self.model_version = version
+        if version == "gpt3":
+            self.setWindowTitle("ChadGPTv.3")
+        else:
+            self.setWindowTitle("ChadGPTv.4")
+        self.update_current_cost_and_length()
+    def set_output_token_cost_based_on_model(self):
+        if self.model_version == "gpt4":
+            self.output_token_cost = OUTPUT_TOKEN_COST * 2
+        else:
+            self.output_token_cost = OUTPUT_TOKEN_COST
+    def update_current_cost_and_length(self):
+        text = self.input_text.toPlainText()
+        text_length = len(text)
+        cost = (text_length * self.input_token_cost + self.output_token_cost * 200) * 100
+        self.token_count_label.setText(f"Cost: ${cost:.2f} | Text length: {text_length}")
+    def update_clarifying_question(self):
+        if not self.clarifying_question_input.text():
+            self.clarifying_question_input.setPlaceholderText("Структурируй по пунктам о чем здесь:")
+            self.clarifying_question_input.setStyleSheet("QLineEdit { color: gray; } QLineEdit:focus { color: black; }")
+    def get_structure(self):
+        clarifying_question = self.clarifying_question_input.text()
+        if not clarifying_question:
+            clarifying_question = "Структурируй по пунктам о чем здесь:"
+        prompt = f"{clarifying_question}: {self.input_text.toPlainText()}"
+        response, tokens_info = self.query_api(prompt)
+        input_tokens, output_tokens = tokens_info
+        self.output_text_1.setPlainText(response)
+        self.update_token_count_and_cost(input_tokens, output_tokens)
+    def get_summary(self):
+        # В зависимости от активного виджета меняем запрос
+        if self.active_widget == self.input_text:
+            prompt = f"Вот ты написал, что: '{self.clarifying_question_input.text()}', а уточни: {self.input_text.toPlainText()}"
+        else:
+            prompt = f"Вот ты написал, что: '{self.clarifying_question_input.text()}', а уточни: {self.output_text_1.toPlainText()}"
+        response, tokens_info = self.query_api(prompt)
+        input_tokens, output_tokens = tokens_info
+        self.output_text_1.setPlainText(response)
+        self.update_token_count_and_cost(input_tokens, output_tokens)
+    def query_api(self, prompt):
+        try:
+            response = requests.post('http://localhost:5000/query', json={
+                'prompt': prompt,
+                'model_version': self.model_version
+            }).json()
+            if 'error' in response:
+                self.show_error_message(response['error'])
+                return '', (0, 0)
+            return response.get('text', ''), (response['usage']['total_tokens'], response['usage']['prompt_tokens'])
+        except Exception as e:
+            self.show_error_message(str(e))
+            return str(e), (0, 0)
+    def update_token_count_and_cost(self, input_tokens, output_tokens):
+        total_tokens = input_tokens + output_tokens
+        if self.model_version == "gpt4":
+            current_cost = total_tokens * (self.output_token_cost * 2)
+        else:
+            current_cost = total_tokens * self.output_token_cost
+        self.token_count_label.setText(
+            f"Used: {total_tokens} tokens | Cost: ${current_cost:.4f} | Input length: {input_tokens} tokens")
+    def on_price_clicked(self):
+        # Создаем диалоговое окно с двумя полями для ввода
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Set Token Costs")
+        layout = QFormLayout()
+        # Поле для ввода Input Price
+        input_price_edit = QDoubleSpinBox()
+        input_price_edit.setRange(0, 100)
+        input_price_edit.setDecimals(4)
+        input_price_edit.setValue(self.input_token_cost * 1000)
+        layout.addRow("Input Price ($ per token):", input_price_edit)
+        # Поле для ввода Output Price
+        output_price_edit = QDoubleSpinBox()
+        output_price_edit.setRange(0, 100)
+        output_price_edit.setDecimals(4)
+        output_price_edit.setValue(self.output_token_cost * 1000)
+        layout.addRow("Output Price ($ per token):", output_price_edit)
+        # Кнопки Ok и Cancel
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.setLayout(layout)
+        # Если пользователь нажал Ok, обновляем и сохраняем значения
+        if dialog.exec_() == QDialog.Accepted:
+            self.input_token_cost = input_price_edit.value() / 1000
+            self.output_token_cost = output_price_edit.value() / 1000
+            self.settings.setValue('input_token_cost', self.input_token_cost)
+            self.settings.setValue('output_token_cost', self.output_token_cost)
+    def show_error_message(self, message):
+        error_dialog = QMessageBox(self)
+        error_dialog.setIcon(QMessageBox.Critical)
+        error_dialog.setText("Error")
+        error_dialog.setInformativeText(message)
+        error_dialog.setWindowTitle("Error")
+        error_dialog.exec_()
+if __name__ == '__main__':
+    app = QApplication([])
+    window = App()
+    window.show()
+    app.exec_()
