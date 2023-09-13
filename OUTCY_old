@@ -1,0 +1,320 @@
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Updater, CommandHandler, CallbackContext, CallbackQueryHandler
+import telegram.error
+
+# Initialize Google Sheets API
+SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
+credentials = Credentials.from_service_account_file('total-vertex-397319-a26ac8a48653.json', scopes=SCOPES)
+service = build('sheets', 'v4', credentials=credentials)
+sheet = service.spreadsheets()
+
+
+def start(update: Update, context: CallbackContext) -> None:
+    query = update.callback_query
+    message = update.message or query.message  # Используем query.message, если update.message None
+
+    keyboard = [
+        [InlineKeyboardButton("📋Список мероприятий", callback_data="show_events")],
+        [InlineKeyboardButton("👤Личный кабинет", callback_data="personal_cabinet")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    text = ('🎥Показываем культовые фильмы в разных местах Лимассола. \n'
+            'Следите за афишей\n'
+            'Поддержать: револют @aleksa74gd\n'
+            'Чат: https://t.me/outdoor_cinema_cy\n'
+            'Сотрудничество, аренда оборудования @limarockstar\n'
+            '🇨🇾Кипр, Лимассол\n'
+            'Ближайшие мероприятия:')
+
+    if query:
+        query.edit_message_text(text, reply_markup=reply_markup)
+    else:
+        message.reply_text(text, reply_markup=reply_markup)
+
+
+def show_personal_cabinet(update: Update, context: CallbackContext):
+    delete_last_message(context, update)
+    query = update.callback_query
+    user = update.effective_user
+    user_id = f"@{user.username}" if user.username else str(user.id)
+
+    user_bookings = fetch_user_bookings(user_id)
+
+    text = f"👤Личный кабинет\nПрофиль: {user.full_name}\n"
+
+    has_active_bookings = False  # Флаг для отслеживания наличия активных бронирований
+    if user_bookings:
+        for event_name, payment_status in user_bookings.items():
+            for status, tickets_count in payment_status.items():
+                if tickets_count > 0:
+                    if not has_active_bookings:
+                        text += "\n"  # Добавляем разделитель только один раз
+                    text += f"🎬{event_name}\n{status}: {tickets_count} билета\n"
+                    has_active_bookings = True
+
+    keyboard = [
+        [InlineKeyboardButton("🔙Назад", callback_data="main_menu")]
+    ]
+
+    if has_active_bookings:
+        for event_name in user_bookings.keys():
+            keyboard.append([InlineKeyboardButton(f"❌Отменить {event_name}", callback_data=f"cancel:{event_name}")])
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    query.edit_message_text(text, reply_markup=reply_markup)
+
+
+
+def show_events(update: Update, context: CallbackContext, message_id=None):
+    events = fetch_events()
+    registered_count = fetch_registered_users_count()
+    keyboard = []
+    for event in events:
+        event_name = event['name']
+        event_date = event['date']
+        count = registered_count.get(event_name, 0)
+        button_text = f"{event_date} - {event_name} ({count} мест занято)"
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=f"event:{event_name}")])
+    keyboard.append([InlineKeyboardButton("🔙Назад", callback_data="main_menu")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    if message_id:
+        context.bot.edit_message_text(
+            '🎥Показываем культовые фильмы в разных местах Лимассола. \nСледите за афишей\nПоддержать: револют @aleksa74gd\nЧат: https://t.me/outdoor_cinema_cy\nСотрудничество, аренда оборудования @limarockstar\n🇨🇾Кипр, Лимассол\nБлижайшие мероприятия:',
+            chat_id=update.effective_chat.id,
+            message_id=message_id,
+            reply_markup=reply_markup
+        )
+    else:
+        update.message.reply_text(
+            '🎥Показываем культовые фильмы в разных местах Лимассола. \nСледите за афишей\nПоддержать: револют @aleksa74gd\nЧат: https://t.me/outdoor_cinema_cy\nСотрудничество, аренда оборудования @limarockstar\n🇨🇾Кипр, Лимассол\nБлижайшие мероприятия:',
+            reply_markup=reply_markup
+        )
+
+# Telegram Bot: Callback function
+def event_callback(update: Update, context: CallbackContext) -> None:
+    query = update.callback_query
+    query.answer()
+    event_type = query.data.split(":", 1)[0]
+    event_name = query.data.split(":", 1)[1] if ":" in query.data else None
+    user = update.effective_user
+
+    if event_type == 'event':
+        delete_last_message(context, update)
+        event = next((e for e in fetch_events() if e['name'] == event_name), None)
+        if event:
+            keyboard = [
+                [InlineKeyboardButton("📝Записаться", callback_data=f"register:{event_name}")],
+                [InlineKeyboardButton("🔙Назад", callback_data="back")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            query.edit_message_text(f"🍿{event_name}:\n\b{event['description']}",
+                                    reply_markup=reply_markup)
+    elif event_type == 'show_events':
+        show_events(update, context, message_id=query.message.message_id)
+    elif event_type == 'personal_cabinet':
+        show_personal_cabinet(update, context)
+    elif event_type == 'main_menu':
+        delete_last_message(context, update)
+        start(update, context)
+    elif event_type == 'cancel':
+        delete_last_message(context, update)
+        cancel_booking(user, event_name)  # Функция для отмены брони
+        query.edit_message_text(f"Бронь на мероприятие {event_name} отменена.")
+        show_personal_cabinet(update, context)  # Обновляем личный кабинет
+
+    elif event_type == 'register':
+        delete_last_message(context, update)
+        keyboard = [
+            [InlineKeyboardButton("1", callback_data=f"seats:1:{event_name}"),
+             InlineKeyboardButton("2", callback_data=f"seats:2:{event_name}"),
+             InlineKeyboardButton("3", callback_data=f"seats:3:{event_name}")],
+            [InlineKeyboardButton("4", callback_data=f"seats:4:{event_name}"),
+             InlineKeyboardButton("5", callback_data=f"seats:5:{event_name}"),
+             InlineKeyboardButton("6", callback_data=f"seats:6:{event_name}")],
+            [InlineKeyboardButton("🔙Назад", callback_data="back")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        query.edit_message_text(f"🐰Сколько мест вы хотите забронировать на {event_name}?", reply_markup=reply_markup)
+    elif event_type == 'seats':
+        delete_last_message(context, update)
+        parts = query.data.split(":")
+        seats = parts[1]
+        event_name = ":".join(parts[2:])  # объединяем все, что идет после второго двоеточия обратно в строку
+        keyboard = [
+            [InlineKeyboardButton("💸Наличными на месте", callback_data=f"pay_cash:{event_name}:{seats}")],
+            [InlineKeyboardButton("💳Онлайн", callback_data=f"pay_online:{event_name}:{seats}")],
+            [InlineKeyboardButton("🔙Назад", callback_data="back")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        query.edit_message_text(f"🐰Как бы вы хотели оплатить {seats} мест на фильм {event_name}?", reply_markup=reply_markup)
+
+
+    elif event_type in ['pay_cash', 'pay_online']:
+        delete_last_message(context, update)
+        parts = query.data.split(":")
+        seats = parts[-1]
+        event_name = ":".join(
+            parts[1:-1])  # объединяем все, что идет после первого и до последнего двоеточия обратно в строку
+        status = '💸наличными' if event_type == 'pay_cash' else '💳онлайн'
+        add_or_update_registration_to_sheet(user, event_name, status, seats)
+        last_message_id = context.user_data.get('last_message_id')
+        if last_message_id:
+            context.bot.delete_message(chat_id=update.effective_chat.id, message_id=last_message_id)
+            del context.user_data['last_message_id']
+        if event_type == 'pay_cash':
+            text = f"Мы забронировали 📝 вам {seats} мест на фильм: {event_name}.\nСпособ оплаты: {status}"
+            keyboard = [[InlineKeyboardButton("🔙Назад", callback_data=f"back:{event_name}")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            query.edit_message_text(text, reply_markup=reply_markup)
+
+        else:
+            text = ("Способы оплаты:\n"
+                    "1. Telegram Bot: https://t.me/outcy/159\n"
+                    "2. Revolut: @aleksa74gd\n"
+                    "3. Patreon: https://www.patreon.com/OUTDOORCINEMA\n"
+                    "После пишите 👩🏻 @qeaqa, чтобы вас внесли в список или просто кидайте ей скрин экрана")
+            keyboard = [
+                [InlineKeyboardButton("Проверить статус", callback_data=f"check_status:{event_name}")],
+                [InlineKeyboardButton("🔙Назад", callback_data=f"back:{event_name}")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            query.edit_message_text(text, reply_markup=reply_markup)
+
+    elif event_type == 'check_status':
+        delete_last_message(context, update)
+        text = f"🎬Статус для мероприятия: {event_name} пока проверяется. \nВ ближайшее время вам напишет 👩🏻 @qeaqa"
+        keyboard = [[InlineKeyboardButton("🔙Назад", callback_data=f"back:{event_name}")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        query.edit_message_text(text, reply_markup=reply_markup)
+
+    elif event_type == 'back':
+        delete_last_message(context, update)
+        add_or_update_registration_to_sheet(user, event_name, 'back')
+        show_events(update, context, message_id=query.message.message_id)
+
+# Telegram Bot: Show Events List
+def fetch_user_bookings(user_id):
+    SPREADSHEET_ID = '1MTV8EcGxH4LGVPZdsJeOAzfDLvo7D0MVN3itdaG5FzQ'
+    RANGE_NAME = 'Sheet2!A2:D'
+    result = sheet.values().get(spreadsheetId=SPREADSHEET_ID, range=RANGE_NAME).execute()
+    values = result.get('values', [])
+
+    user_bookings = {}
+    for row in values:
+        if row[0] == user_id:
+            event_name = row[1]
+            payment_status = row[2]
+            if payment_status == 'back':  # Игнорируем записи со статусом 'back'
+                continue
+            tickets_count = int(row[3])
+            if event_name not in user_bookings:
+                user_bookings[event_name] = {}
+            user_bookings[event_name][payment_status] = tickets_count
+
+    return user_bookings
+def cancel_booking(user, event_name):
+    user_identifier = f"@{user.username}" if user.username else str(user.id)
+    SPREADSHEET_ID = '1MTV8EcGxH4LGVPZdsJeOAzfDLvo7D0MVN3itdaG5FzQ'
+    RANGE_NAME = 'Sheet2!A2:D'
+    result = sheet.values().get(spreadsheetId=SPREADSHEET_ID, range=RANGE_NAME).execute()
+    values = result.get('values', [])
+    for i, row in enumerate(values):
+        if row[0] == user_identifier and row[1] == event_name:
+            row[3] = "0"  # Setting the status to "0" to indicate cancellation
+            row[1] = ""  # Setting the status to "" to indicate cancellation
+            sheet.values().update(
+                spreadsheetId=SPREADSHEET_ID,
+                range=f'Sheet2!A{i + 2}:D{i + 2}',
+                body={"values": [row]},
+                valueInputOption='RAW'
+            ).execute()
+            break
+def fetch_events():
+    SPREADSHEET_ID = '1MTV8EcGxH4LGVPZdsJeOAzfDLvo7D0MVN3itdaG5FzQ'
+    RANGE_NAME = 'Sheet1!A2:E10'
+    result = sheet.values().get(spreadsheetId=SPREADSHEET_ID, range=RANGE_NAME).execute()
+    values = result.get('values', [])
+    events = [{"date": row[0], "name": row[1], "description": row[2], "attachment": row[3] if len(row) > 3 else None} for row in values]
+    return events
+
+# Fetch registered users count for each event from Google Sheets
+def fetch_registered_users_count():
+    SPREADSHEET_ID = '1MTV8EcGxH4LGVPZdsJeOAzfDLvo7D0MVN3itdaG5FzQ'
+    RANGE_NAME = 'Sheet2!A2:D'
+    result = sheet.values().get(spreadsheetId=SPREADSHEET_ID, range=RANGE_NAME).execute()
+    values = result.get('values', [])
+    event_count = {}
+    for row in values:
+        if len(row) >= 4 and row[2] in ['💸наличными', '💳онлайн']:
+            event_name = row[1]
+            seats = int(row[3])
+            if event_name not in event_count:
+                event_count[event_name] = 0
+            event_count[event_name] += seats
+    return event_count
+
+# Add or Update registration to Google Sheets
+def add_or_update_registration_to_sheet(user, event_name, status, seats=1):
+    if seats is not None:
+        seats = int(seats)
+    user_identifier = f"@{user.username}" if user.username else str(user.id)
+    SPREADSHEET_ID = '1MTV8EcGxH4LGVPZdsJeOAzfDLvo7D0MVN3itdaG5FzQ'
+    RANGE_NAME = 'Sheet2!A2:D'
+    result = sheet.values().get(spreadsheetId=SPREADSHEET_ID, range=RANGE_NAME).execute()
+    values = result.get('values', [])
+
+    if status in ['💸наличными', '💳онлайн']:  # Если это методы оплаты, создаем новую строку
+        new_row = [user_identifier, event_name, status, str(seats)]
+        sheet.values().append(
+            spreadsheetId=SPREADSHEET_ID,
+            range=RANGE_NAME,
+            body={"values": [new_row]},
+            valueInputOption='RAW'
+        ).execute()
+    else:  # Для остальных статусов оставляем существующий функционал
+        found = False
+        for i, row in enumerate(values):
+            if row[0] == user_identifier and row[1] == event_name and status != 'back':
+                row[2] = status
+                row[3] = str(int(row[3]) + seats)
+                sheet.values().update(
+                    spreadsheetId=SPREADSHEET_ID,
+                    range=f'Sheet2!A{i + 2}:D{i + 2}',
+                    body={"values": [row]},
+                    valueInputOption='RAW'
+                ).execute()
+                found = True
+                break
+        if not found or status == 'back':
+            new_row = [user_identifier, event_name, status, str(seats)]
+            sheet.values().append(
+                spreadsheetId=SPREADSHEET_ID,
+                range=RANGE_NAME,
+                body={"values": [new_row]},
+                valueInputOption='RAW'
+            ).execute()
+
+# Удаление последнего сообщения, если оно есть
+def delete_last_message(context, update):
+    last_message_id = context.user_data.get('last_message_id')
+    if last_message_id:
+        try:
+            context.bot.delete_message(chat_id=update.effective_chat.id, message_id=last_message_id)
+        except telegram.error.BadRequest:
+            pass
+        del context.user_data['last_message_id']
+
+# Main function
+def main() -> None:
+    updater = Updater("6551047772:AAE3CNw2mvx1su-qN1AFqHaII49Vxbg3pCo")
+    dp = updater.dispatcher
+    dp.add_handler(CommandHandler('start', start))
+    dp.add_handler(CallbackQueryHandler(event_callback))
+    updater.start_polling()
+    updater.idle()
+
+if __name__ == '__main__':
+    main()
